@@ -20,7 +20,13 @@ import { newSeed } from './engine/rng';
 import { createSfx } from './engine/sound';
 import { createStore } from './engine/storage';
 import { createNet, type Net } from './engine/net';
-import { createLobby, getOrCreateRoomCode, type LobbyPlayer } from './engine/lobby';
+import {
+  createLobby,
+  createRoomEntry,
+  normalizeRoomCode,
+  setRoomInUrl,
+  type LobbyPlayer,
+} from './engine/lobby';
 import { NetGame } from './net-game';
 import { BoardView, PLAYER_ACCENTS, TILE_COLORS } from './render';
 import {
@@ -566,7 +572,32 @@ function renderSoloSetup(): void {
 
 function enterFriends(): void {
   cleanupMp();
-  const code = getOrCreateRoomCode();
+
+  // Deep-linked via an invite (?room=)? Join it straight away. Otherwise show
+  // the create/join screen so a friend can type the code, not just tap the link.
+  const deep = normalizeRoomCode(new URL(location.href).searchParams.get('room') ?? '');
+  if (deep.length >= 3) {
+    openRoom(deep);
+    return;
+  }
+
+  content.innerHTML = `
+    <section class="screen lobby-screen">
+      <button class="back" data-act="back" aria-label="Back to menu">‹ Menu</button>
+      <div class="lobby-mount" id="entryMount"></div>
+    </section>`;
+  content.querySelector('[data-act="back"]')?.addEventListener('click', toMenu);
+
+  createRoomEntry({
+    container: document.getElementById('entryMount')!,
+    subtitle: 'Start a new room, or enter a friend’s code to join theirs.',
+    onSubmit: (code) => openRoom(code),
+  });
+}
+
+function openRoom(code: string): void {
+  cleanupMp();
+  setRoomInUrl(code);
   net = createNet(
     { appId: APP_ID, roomId: code },
     {

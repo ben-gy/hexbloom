@@ -714,6 +714,77 @@ body {
   opacity: 1;
 }
 
+/* ---------- room entry (create / join by code) ---------- */
+.room-entry {
+  max-width: 380px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: center;
+}
+.re-head { margin-bottom: 2px; }
+.re-title { font-size: 22px; margin: 0 0 6px; }
+.re-sub { color: var(--muted); font-size: 14px; margin: 0; }
+.re-create {
+  width: 100%;
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #04202f;
+  font-weight: 700;
+}
+.re-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.re-divider::before,
+.re-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.re-join { display: flex; gap: 8px; }
+.re-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.re-input:focus-visible {
+  outline: 3px solid var(--accent-2);
+  outline-offset: 2px;
+}
+.re-input::placeholder {
+  letter-spacing: normal;
+  font-weight: 500;
+  text-transform: none;
+  color: var(--muted);
+}
+.re-error {
+  color: #fb7185;
+  font-size: 13px;
+  min-height: 16px;
+  margin: 0;
+}
+.re-cancel { align-self: center; }
+
 /* ---------- modal ---------- */
 .modal-overlay {
   position: fixed;
