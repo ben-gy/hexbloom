@@ -1,0 +1,24 @@
+{
+  "name": "hexbloom",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Pick a colour, bloom your blob across the honeycomb, and claim more tiles than your rivals.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "trystero": "^0.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "jsdom": "^25.0.0"
+  }
+}
