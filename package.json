@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "trystero": "^0.21.0"
+    "trystero": "^0.25.3"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
