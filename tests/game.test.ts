@@ -77,13 +77,32 @@ describe('startCells', () => {
 });
 
 describe('generateBoard', () => {
-  it('seats every player with a distinct starting colour and ≥1 tile', () => {
+  it('seats every player with a distinct starting colour', () => {
     for (const players of [2, 3, 4]) {
       const s = generateBoard(42, { players });
       expect(s.color.length).toBe(players);
       expect(new Set(s.color).size).toBe(players); // distinct start colours
-      const sc = scores(s);
-      for (let p = 0; p < players; p++) expect(sc[p]).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('gives every player an equal opening (exactly one tile) across many seeds', () => {
+    // Regression: the random board must never hand a player a free starting blob.
+    for (let seed = 0; seed < 200; seed++) {
+      for (const players of [2, 3, 4]) {
+        const s = generateBoard(seed, { players });
+        const sc = scores(s);
+        for (let p = 0; p < players; p++) {
+          expect(sc[p]).toBe(1);
+        }
+        // And the invariant holds: no neutral tile of a player's colour touches
+        // their seed (nothing left un-absorbed that they can't take).
+        for (let p = 0; p < players; p++) {
+          const seat = s.owner.indexOf(p);
+          for (const nb of neighbors(seat, s.w, s.h)) {
+            if (s.owner[nb] === NEUTRAL) expect(s.tile[nb]).not.toBe(s.color[p]);
+          }
+        }
+      }
     }
   });
 

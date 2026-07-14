@@ -159,6 +159,21 @@ export function generateBoard(seed: number | string, opts: BoardOptions = {}): G
     owner[starts[p]] = p;
   }
 
+  // Balance the opening: isolate each seed cell so no player gets a free
+  // starting blob from a lucky same-colour cluster on the random board. We
+  // recolour any neutral neighbour that matches the seed's colour, so every
+  // player begins with exactly one tile — fairness that doesn't depend on the
+  // random layout. (Deterministic via rng, so peers still agree.)
+  for (let p = 0; p < players; p++) {
+    for (const n of neighbors(starts[p], w, h)) {
+      if (owner[n] === NEUTRAL && tile[n] === color[p]) {
+        let r = randInt(rng, 0, colors - 2);
+        if (r >= color[p]) r++; // pick uniformly among colours != color[p]
+        tile[n] = r;
+      }
+    }
+  }
+
   const state: GameState = {
     w,
     h,
@@ -173,7 +188,8 @@ export function generateBoard(seed: number | string, opts: BoardOptions = {}): G
     finished: false,
   };
 
-  // Grow each starting blob into any touching same-colour neutrals.
+  // Establish the "no un-absorbed same-colour neutral touching a blob"
+  // invariant. After isolation this absorbs nothing, so all players start at 1.
   for (let p = 0; p < players; p++) floodAbsorb(state, p);
   return state;
 }
