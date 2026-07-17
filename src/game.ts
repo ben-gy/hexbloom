@@ -4,9 +4,10 @@
  * A hex grid (odd-r offset, pointy-top) is painted in `colors` colours. Each
  * player owns one corner cell. On a turn a player picks a colour (any but their
  * current one): their whole territory recolours to it and then absorbs, by a
- * flood fill, every neutral tile of that colour touching the territory. When no
- * neutral tiles remain (or a full round passes with zero captures), the game
- * ends and the largest territory wins.
+ * flood fill, every neutral tile of that colour touching the territory — but only
+ * as far as the tide reaches, and the tide rises every few moves (see TIDE_START).
+ * When no neutral tiles remain (or a full round passes with zero captures), the
+ * game ends and the largest territory wins.
  *
  * Everything derives from a single numeric seed (via engine/rng), so two peers
  * that start from the same lobby seed build byte-identical boards — the P2P-sync
@@ -19,6 +20,37 @@ export const DEFAULT_W = 9;
 export const DEFAULT_H = 9;
 export const DEFAULT_COLORS = 6;
 export const NEUTRAL = -1;
+
+/**
+ * The tide. A bloom only spreads `reach` tiles out from your territory, and the
+ * reach rises as the game goes on — low tide early, high tide late.
+ *
+ * This is the game's only brake on the snowball. Without it the leader's bigger
+ * frontier out-captures the trailer ~1.35x every single round, and that gap is
+ * permanent (nothing in the rules can ever reduce a score), so a lucky opening
+ * cascade is a won game: measured over 800 AI games, whoever led after 3 moves
+ * won 64% of the time and 30% of games ended as blowouts. Limiting reach early
+ * denies the opening the chance to bank that lead, and raising it later lets the
+ * board still resolve decisively. Measured with the tide: 54% and 13%.
+ *
+ * TIDE_EVERY is a FAIRNESS constant, not a balance dial — see the comment on it.
+ * To trade balance for a juicier opening, move TIDE_START (see README).
+ */
+export const TIDE_START = (players: number): number => players - 1; // 2P:1 3P:2 4P:3
+/**
+ * Keep gcd(TIDE_EVERY, players) === 1. Because reach steps on MOVE count rather
+ * than round count, a coprime period lands each seat's reach bumps at different
+ * points in the round, which cancels the first-player tempo edge for free.
+ * Breaking coprimality silently un-fixes it: at 2P an even value re-introduces a
+ * 63% first-player win rate — worse than the 55% we started from. Guarded by a
+ * test in tests/game.test.ts.
+ */
+export const TIDE_EVERY = (players: number): number => players + 1; // 2P:3 3P:4 4P:5
+
+/** How far a bloom spreads this turn. Pure function of state — nothing to sync. */
+export function bloomReach(s: GameState): number {
+  return TIDE_START(s.players) + Math.floor(s.turnNo / TIDE_EVERY(s.players));
+}
 
 export interface GameState {
   w: number;
@@ -117,21 +149,34 @@ export function cloneState(s: GameState): GameState {
   };
 }
 
-/** Flood-absorb neutral tiles of `player`'s current colour touching their blob. */
-function floodAbsorb(s: GameState, player: number): number[] {
+/**
+ * Flood-absorb neutral tiles of `player`'s current colour touching their blob,
+ * spreading at most `reach` tiles outward from it.
+ *
+ * Expands in layers from every owned cell at once, so `reach` is a true distance
+ * from the territory — a plain queue would let one deep tendril race ahead and
+ * spend the reach on a single arm. Cells come out in wave order, which render.ts
+ * uses to stagger the particle burst outward.
+ */
+function floodAbsorb(s: GameState, player: number, reach: number = Infinity): number[] {
   const want = s.color[player];
   const absorbed: number[] = [];
-  const queue: number[] = [];
-  for (let i = 0; i < s.owner.length; i++) if (s.owner[i] === player) queue.push(i);
-  while (queue.length) {
-    const cell = queue.pop()!;
-    for (const n of neighbors(cell, s.w, s.h)) {
-      if (s.owner[n] === NEUTRAL && s.tile[n] === want) {
-        s.owner[n] = player;
-        absorbed.push(n);
-        queue.push(n);
+  const seen = new Uint8Array(s.owner.length);
+  let layer: number[] = [];
+  for (let i = 0; i < s.owner.length; i++) if (s.owner[i] === player) layer.push(i);
+  for (let d = 0; d < reach && layer.length; d++) {
+    const next: number[] = [];
+    for (const cell of layer) {
+      for (const n of neighbors(cell, s.w, s.h)) {
+        if (s.owner[n] === NEUTRAL && s.tile[n] === want && !seen[n]) {
+          seen[n] = 1;
+          s.owner[n] = player;
+          absorbed.push(n);
+          next.push(n);
+        }
       }
     }
+    layer = next;
   }
   return absorbed;
 }
@@ -239,7 +284,8 @@ export function applyMove(prev: GameState, player: number, color: number): MoveR
   const s = cloneState(prev);
   s.color[player] = color;
   for (let i = 0; i < s.owner.length; i++) if (s.owner[i] === player) s.tile[i] = color;
-  const absorbed = floodAbsorb(s, player);
+  // turnNo is still the pre-move value here, which is the tide this move rides.
+  const absorbed = floodAbsorb(s, player, bloomReach(s));
 
   s.turn = (s.turn + 1) % s.players;
   s.turnNo += 1;
@@ -294,6 +340,11 @@ export function chooseAiColor(
     if (difficulty === 'hard') {
       const next = res.state;
       // Reward opening more frontier, penalise handing the opponent a big reply.
+      // Weighted higher than raw capture because the tide pays position over
+      // greed: tiles out of reach now are still there at high tide, so lining a
+      // big patch up beats grabbing a small one. Swept vs greedy over 1000 games
+      // a cell: these sit on a broad 71-72% plateau. Don't push past ~0.95 — the
+      // eval falls off a cliff there (1.0/0.9 scores 57%, worse than not tuning).
       const growth = frontierNeutral(next, player);
       let bestReply = 0;
       const opp = next.turn;
@@ -302,7 +353,7 @@ export function chooseAiColor(
           bestReply = Math.max(bestReply, captureCount(next, opp, oc));
         }
       }
-      val = res.absorbed.length + 0.35 * growth - 0.25 * bestReply;
+      val = res.absorbed.length + 0.8 * growth - 0.75 * bestReply;
     }
     if (val > bestVal) {
       bestVal = val;

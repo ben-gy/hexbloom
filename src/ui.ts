@@ -76,6 +76,11 @@ export const HOWTO_HTML = `
     <li><strong>Pick a colour</strong> — your whole territory turns that colour and
       instantly <strong>swallows every touching tile of it</strong>. Bigger clusters
       mean bigger gains.</li>
+    <li><strong>The tide limits how far a bloom spreads.</strong> Early on it reaches
+      just one tile out, so nobody can run away with the board. Every few moves the
+      tide rises and blooms reach further — by the end they sweep.</li>
+    <li>So <strong>a big patch out of reach isn't lost, it's ripening</strong>. Line it
+      up for high tide — but your rival can see it too.</li>
     <li>You <strong>can't pick the colour you already are</strong>.</li>
     <li>Rivals bloom from their corners too — grab the ground they want first.</li>
     <li>When no neutral tiles are left, the <strong>largest territory wins</strong>.</li>
