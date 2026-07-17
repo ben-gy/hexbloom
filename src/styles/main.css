@@ -1070,3 +1070,210 @@ kbd {
     animation-iteration-count: infinite !important;
   }
 }
+
+/* ---------- public / private ---------- */
+/* The IP disclosure sits AT the opt-in, not in About: it is the whole cost of a
+   public room, and nobody opens About before tapping a button. */
+.re-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  text-align: left;
+}
+/* The pull-up is scoped to the entry screen ON PURPOSE. .room-entry is a flex
+   column with a 14px gap, so -6px there merely tucks the note under its chips.
+   The lobby renders the same note in plain block flow (via modeSlot), where the
+   same rule dragged the text up THROUGH the Private/Public chips — six pixels of
+   overlap, landing on the one paragraph that has to be readable. */
+.room-entry .re-note {
+  margin-top: -6px;
+}
+.vis {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.vis-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+.vis-meta { font-size: 11px; }
+.mode-note.pub { color: var(--accent); }
+
+.lobby-btn.primary {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: #04202f;
+  font-weight: 700;
+}
+.lobby-btn.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* ---------- public room list ---------- */
+.re-rooms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.re-room {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  text-align: left;
+  align-items: baseline;
+  padding: 10px 12px;
+  border-radius: 10px;
+  min-height: 44px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-family: inherit;
+  cursor: pointer;
+}
+.re-room:hover { border-color: var(--accent-2); }
+.re-room:active { transform: translateY(1px); }
+.re-room-host {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.re-room-code {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: var(--accent-2);
+}
+.re-room-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.re-room-meta {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.re-room-state {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.re-room.playing { opacity: 0.8; }
+.re-empty {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 4px 0;
+  text-align: left;
+}
+
+/* ---------- mode picker ---------- */
+.modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+.modes .mode-blurb {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 16px;
+}
+/* The visibility chips are deliberately the same object as a mode chip — same
+   grid, same weight. A public room is a choice about the room, not a warning. */
+.mode-chip,
+.vis-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  padding: 10px 6px;
+  border-radius: 12px;
+  min-height: 44px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: inherit;
+  cursor: pointer;
+}
+.mode-chip.on,
+.vis-chip.on {
+  color: var(--text);
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 35%, transparent);
+}
+.mode-chip:focus-visible,
+.vis-chip:focus-visible {
+  outline: 3px solid var(--accent-2);
+  outline-offset: 2px;
+}
+.mode-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+.mode-meta {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.mode-note {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mode-note strong { color: var(--text); }
+
+/* ---------- countdown ---------- */
+/* Sits over the board so the honeycomb is readable before anyone can take a tile
+   off it — the whole point is that everyone gets the same look at it. */
+.cd-host {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+.countdown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.cd-num {
+  font-size: clamp(64px, 22vw, 132px);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--accent-2);
+  text-shadow: 0 6px 30px color-mix(in srgb, var(--accent-2) 45%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.cd-num.cd-go { color: var(--good); }
+.cd-num.cd-tick { animation: cd-pop 900ms ease-out; }
+.cd-num.cd-go { animation: cd-pop 420ms ease-out; }
+.countdown.reduced .cd-num { animation: none; }
+@keyframes cd-pop {
+  0% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+  18% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.94);
+    opacity: 0.85;
+  }
+}

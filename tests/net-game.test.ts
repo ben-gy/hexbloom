@@ -77,13 +77,21 @@ interface Peer {
 }
 
 const SEED = 0xbeef;
+/** Every peer in a round is handed the host's board, byte-identical. */
+const BOARD = { w: 9, h: 9, colors: 6 };
 
 /** Seat every id in `seats` into one round of the same match. */
 function match(bus: Bus, seats: PeerId[], roomHost?: () => PeerId | null): Peer[] {
   return seats.map((id) => {
     const net = mockNet(bus, id, roomHost);
     let last: GameState | null = null;
-    const game = new NetGame({ net, seed: SEED, seats, onUpdate: (s) => (last = s) });
+    const game = new NetGame({
+      net,
+      seed: SEED,
+      seats,
+      board: BOARD,
+      onUpdate: (s) => (last = s),
+    });
     return { id, net, game, state: () => last ?? game.getState() };
   });
 }
@@ -188,6 +196,34 @@ describe('NetGame — round authority', () => {
     expect(z.game.isHost()).toBe(true);
     z.game.play(pick(z.state(), 1)); // the promoted host applies its own move
     expect(z.state().turnNo).toBe(2);
+  });
+});
+
+describe("NetGame — the host's board, frozen", () => {
+  it('builds the board the round start carried, not the default one', () => {
+    // The mode reaches NetGame as bytes from the host. If it were dropped here,
+    // a guest would silently build the 9x9 default while the host played a 13x11
+    // Wilds, and the first snapshot would replace the grid under their finger.
+    const bus2 = new Bus();
+    const net = mockNet(bus2, 'a');
+    const game = new NetGame({
+      net,
+      seed: SEED,
+      seats: ['a', 'b'],
+      board: { w: 13, h: 11, colors: 7 },
+      onUpdate: () => {},
+    });
+    const s = game.getState();
+    expect([s.w, s.h, s.colors]).toEqual([13, 11, 7]);
+    expect(s.tile).toHaveLength(143);
+    game.destroy();
+  });
+
+  it('gives two peers on the same seed and board an identical honeycomb', () => {
+    // The whole point of freezing it: same seed + same board = same bytes, with
+    // no negotiation. Same seed and a DIFFERENT board is just two games.
+    const [a, b] = match(new Bus(), ['a', 'b']);
+    expect(a.game.getState().tile).toEqual(b.game.getState().tile);
   });
 });
 

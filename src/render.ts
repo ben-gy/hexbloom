@@ -10,9 +10,27 @@ import { neighbors, NEUTRAL } from './game';
 
 const SQRT3 = Math.sqrt(3);
 const S = 10; // hex radius in viewBox units
-const SYMBOLS = ['●', '▲', '■', '◆', '✦', '★'];
+/**
+ * One glyph per tile colour, for symbol mode. Exported ONLY so a test can hold
+ * it to the same length as TILE_COLORS: this is the parallel array to the
+ * palette, and a colour without a glyph is read as `SYMBOLS[col] ?? ''` — an
+ * empty hex, no throw, no warning. That failure is invisible to everyone except
+ * the colour-blind players symbol mode exists for, which is the worst possible
+ * audience for a silent bug. TILE_COLORS is pinned against the modes; this is
+ * pinned against TILE_COLORS.
+ */
+export const SYMBOLS = ['●', '▲', '■', '◆', '✦', '★', '✚'];
 
-/** Okabe–Ito colour-blind-safe palette (tile colours). */
+/**
+ * Okabe–Ito colour-blind-safe palette (tile colours).
+ *
+ * Seven, because Wilds paints the board in seven. This is the whole of Okabe–Ito
+ * bar black, and there is no eighth: the set was designed as eight and black is
+ * spoken for by PLAYER_ACCENTS below. So a mode may not ask for more than seven
+ * colours — modes.ts says so and tests/modes.test.ts holds it to it. Reaching
+ * for a "nice purple" to make an eight-colour mode work would quietly cost the
+ * colour-blind safety that is the reason this palette is not prettier.
+ */
 export const TILE_COLORS = [
   '#e69f00', // orange
   '#56b4e9', // sky
@@ -20,6 +38,7 @@ export const TILE_COLORS = [
   '#f0e442', // yellow
   '#0072b2', // blue
   '#d55e00', // vermillion
+  '#cc79a7', // reddish purple
 ];
 
 /** Per-player accent used for owner outlines + UI (distinct from tile colours). */

@@ -40,7 +40,7 @@ export interface RoundPlayer {
   name: string;
 }
 
-export interface RoundInfo {
+export interface RoundInfo<O = unknown> {
   /** 1-based. Increments per rematch; never repeats. */
   round: number;
   /** Shared RNG seed — identical on every peer (see rng.ts). */
@@ -49,6 +49,14 @@ export interface RoundInfo {
   players: RoundPlayer[];
   /** True if this peer is the authoritative host for this round. */
   isHost: boolean;
+  /**
+   * The host's game settings for this round — board size, round length,
+   * difficulty, whatever the game offers. Travels WITH the start for the same
+   * reason the roster does: a setting each peer reads from its own UI is a
+   * setting two peers can disagree about, and then they are playing different
+   * games on the same board.
+   */
+  opts: O;
 }
 
 export type RoundPhase = 'waiting' | 'playing';
@@ -66,6 +74,12 @@ export interface RoundsState {
   isHost: boolean;
   /** Host-only: enough votes to start (>= minPlayers). */
   canStart: boolean;
+  /**
+   * The HOST's current settings, as gossiped — what the next round will use.
+   * Null until the host has been heard from. Never render a local setting as if
+   * it were the host's.
+   */
+  hostOpts: unknown;
   /**
    * Ms until the round starts without the peers who have not voted, or null if
    * no countdown is running. Render it — a silent wait is indistinguishable from
@@ -92,7 +106,12 @@ export interface RoundsConfig {
    * hatch from waiting on a player who is never going to tap.
    */
   graceMs?: number;
-  /** Fires on every peer, for every round, with identical seed + roster. */
+  /**
+   * Host-only: the settings to freeze into the next round's start. Read at go()
+   * time so the host's current lobby choice is what everyone plays.
+   */
+  roundOpts?: () => unknown;
+  /** Fires on every peer, for every round, with identical seed + roster + opts. */
   onRound: (info: RoundInfo) => void;
   /** Anything changed that a lobby/results screen should repaint for. */
   onChange?: (state: RoundsState) => void;
@@ -118,6 +137,13 @@ interface VoteMsg {
   round: number;
   name: string;
   in: boolean;
+  /**
+   * The sender's current game settings. Only the HOST's are ever used — this
+   * rides the presence gossip so a lobby can show everyone what they are about
+   * to play. Without it a guest can only render its OWN setting and call it the
+   * host's, which is a confident lie.
+   */
+  opts?: unknown;
 }
 
 /** Host's authoritative start. Carries everything a peer needs to be in sync. */
@@ -125,6 +151,7 @@ interface StartMsg {
   round: number;
   seed: number;
   roster: RoundPlayer[];
+  opts?: unknown;
 }
 
 export function createRounds(config: RoundsConfig): Rounds {
@@ -143,6 +170,8 @@ export function createRounds(config: RoundsConfig): Rounds {
   /** Set once quorum is reached but some peers still have not answered. */
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
   let graceEndsAt = 0;
+  /** peer id -> the settings it last announced. Only the host's is ever read. */
+  const opts = new Map<PeerId, unknown>();
 
   const next = (): number => round + 1;
 
@@ -173,6 +202,7 @@ export function createRounds(config: RoundsConfig): Rounds {
       voted: !!votes.get(net.selfId)?.in,
       isHost: net.isHost(),
       canStart: net.isHost() && voters().length >= minPlayers,
+      hostOpts: net.isHost() ? config.roundOpts?.() : (opts.get(net.host() ?? '') ?? null),
       startsInMs: graceEndsAt ? Math.max(0, graceEndsAt - now()) : null,
     };
   }
@@ -188,6 +218,7 @@ export function createRounds(config: RoundsConfig): Rounds {
   // and every rematch — there is no second start path to drift out of sync.
   const sendVote = net.channel<VoteMsg>('rv', (msg, from) => {
     names.set(from, msg.name);
+    if (msg.opts !== undefined) opts.set(from, msg.opts);
     // A vote for a round we have already started is noise from a slow peer.
     if (msg.round !== next()) return;
     votes.set(from, { name: msg.name, in: msg.in });
@@ -206,7 +237,7 @@ export function createRounds(config: RoundsConfig): Rounds {
     // unconditionally — a peer that has NOT voted is exactly what a host needs
     // to know before it decides everyone is ready.
     const mine = votes.get(net.selfId);
-    sendVote({ round: next(), name: config.playerName, in: mine?.in ?? false }, from);
+    sendVote({ round: next(), name: config.playerName, in: mine?.in ?? false, opts: config.roundOpts?.() }, from);
   });
 
   function begin(msg: StartMsg): void {
@@ -225,6 +256,8 @@ export function createRounds(config: RoundsConfig): Rounds {
       // Frozen host roster — NOT a local re-derivation. Identical indices everywhere.
       players: msg.roster,
       isHost: net.isHost(),
+      // Likewise the settings: whatever the host chose, byte-identical for all.
+      opts: msg.opts,
     });
   }
 
@@ -233,7 +266,7 @@ export function createRounds(config: RoundsConfig): Rounds {
     const roster = voters();
     if (roster.length < minPlayers) return;
     const seed = Math.floor(Math.random() * 0xffffffff) >>> 0;
-    const msg: StartMsg = { round: next(), seed, roster };
+    const msg: StartMsg = { round: next(), seed, roster, opts: config.roundOpts?.() };
     sendStart(msg); // tell everyone…
     begin(msg); // …and start locally from the identical payload
   }
@@ -280,21 +313,21 @@ export function createRounds(config: RoundsConfig): Rounds {
 
   // Announce ourselves immediately and ask the room to do the same.
   votes.set(net.selfId, { name: config.playerName, in: false });
-  sendVote({ round: next(), name: config.playerName, in: false });
+  sendVote({ round: next(), name: config.playerName, in: false, opts: config.roundOpts?.() });
   sendResync(null);
 
   return {
     vote() {
       if (phase === 'playing') return;
       votes.set(net.selfId, { name: config.playerName, in: true });
-      sendVote({ round: next(), name: config.playerName, in: true });
+      sendVote({ round: next(), name: config.playerName, in: true, opts: config.roundOpts?.() });
       changed();
       maybeAutoStart();
     },
 
     unvote() {
       votes.set(net.selfId, { name: config.playerName, in: false });
-      sendVote({ round: next(), name: config.playerName, in: false });
+      sendVote({ round: next(), name: config.playerName, in: false, opts: config.roundOpts?.() });
       changed();
     },
 

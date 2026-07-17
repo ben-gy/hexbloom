@@ -24,6 +24,7 @@ import {
   applyMove,
   chooseAiColor,
   generateBoard,
+  type BoardOptions,
   type GameState,
   type MoveResult,
 } from './game';
@@ -38,6 +39,14 @@ export interface NetGameConfig {
   seed: number;
   /** Canonical seating: peer ids in ascending order. Index = player number. */
   seats: PeerId[];
+  /**
+   * The board shape for this round, from the HOST's mode. Frozen into the round
+   * start next to the seed and the roster, and for the same reason: the seed only
+   * makes two peers agree if they ask it for the same board. Deriving it from a
+   * local mode picker would have a guest generating a 7x7 while the host played
+   * a 13x11, and the first snapshot would tear the grid out from under them.
+   */
+  board: BoardOptions;
   onUpdate: (state: GameState, meta: NetGameMeta) => void;
 }
 
@@ -65,7 +74,10 @@ export class NetGame {
     this.net = cfg.net;
     this.seats = cfg.seats;
     this.onUpdate = cfg.onUpdate;
-    this.state = generateBoard(cfg.seed, { players: Math.max(2, cfg.seats.length) });
+    this.state = generateBoard(cfg.seed, {
+      ...cfg.board,
+      players: Math.max(2, cfg.seats.length),
+    });
     this.lastRoundHost = this.roundHost();
 
     this.sendMove = this.net.channel<{ color: number }>('mv', (data, from) => {

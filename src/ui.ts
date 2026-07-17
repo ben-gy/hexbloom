@@ -60,6 +60,10 @@ export function soloSetupHTML(defaults: { rivals: number; difficulty: string }):
         </div>
       </div>
       <div class="setup-group">
+        <span class="setup-label">Board</span>
+        <div id="soloModes"></div>
+      </div>
+      <div class="setup-group">
         <span class="setup-label">Difficulty</span>
         <div class="opts">
           ${diffBtn('easy', 'Casual')}${diffBtn('normal', 'Sharp')}${diffBtn('hard', 'Ruthless')}
@@ -70,8 +74,8 @@ export function soloSetupHTML(defaults: { rivals: number; difficulty: string }):
 }
 
 export const HOWTO_HTML = `
-  <p>The board is a honeycomb painted in six colours. You start owning one corner;
-  each rival owns another.</p>
+  <p>The board is a honeycomb painted in four to seven colours, depending on the
+  board you pick. You start owning one corner; each rival owns another.</p>
   <ul>
     <li><strong>Pick a colour</strong> — your whole territory turns that colour and
       instantly <strong>swallows every touching tile of it</strong>. Bigger clusters
@@ -85,7 +89,7 @@ export const HOWTO_HTML = `
     <li>Rivals bloom from their corners too — grab the ground they want first.</li>
     <li>When no neutral tiles are left, the <strong>largest territory wins</strong>.</li>
   </ul>
-  <p class="howto-controls">Desktop: click a swatch or press <kbd>1</kbd>–<kbd>6</kbd>.
+  <p class="howto-controls">Desktop: click a swatch or press <kbd>1</kbd>–<kbd>7</kbd>.
   Mobile: tap a swatch. <kbd>R</kbd> restarts a solo game, <kbd>M</kbd> mutes.</p>`;
 
 export const ABOUT_HTML = `
@@ -96,6 +100,14 @@ export const ABOUT_HTML = `
   directly over WebRTC with <strong>no game server</strong>. A free public signalling
   relay only helps the browsers find each other for the first handshake — no game data
   is stored anywhere.</p>
+  <p><strong>Public rooms and your IP address.</strong> Rooms are <strong>private by
+  default</strong>: they are invite-only and invisible to everyone else. You can choose
+  to list a room publicly, or to browse the public list — and both of those are
+  peer-to-peer too. Connecting to a peer means exchanging network addresses, so
+  <strong>anyone else listing or browsing at the same time can see your IP address</strong>.
+  That is true of any peer-to-peer game, but a public room means strangers rather than
+  friends. It is why listing and browsing are each something you have to opt into, and
+  why the list closes the moment you leave it. A private room never touches it.</p>
   <p>No accounts, no cookies, no tracking beyond anonymous, cookie-less page-view counts
   (Cloudflare Web Analytics). All art and sound are generated in code.</p>
   <p>Built by <a href="https://benrichardson.dev/" target="_blank" rel="noopener">benrichardson.dev</a>.</p>`;

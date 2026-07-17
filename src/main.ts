@@ -28,10 +28,17 @@ import { createRounds, type RoundPlayer, type Rounds } from './engine/rematch';
 import {
   clearRoomInUrl,
   createLobby,
+  createListing,
   createRoomEntry,
   normalizeRoomCode,
   setRoomInUrl,
+  P2P_IP_NOTE,
+  type BoardAccess,
+  type Listing,
 } from './engine/lobby';
+import { createNoticeboard, type Noticeboard, type PublicRoom } from './engine/noticeboard';
+import { createCountdown } from './countdown';
+import { DEFAULT_MODE, MODE_LIST, modeOf, type Mode, type ModeId } from './modes';
 import { NetGame } from './net-game';
 import { BoardView, PLAYER_ACCENTS, TILE_COLORS } from './render';
 import {
@@ -45,6 +52,8 @@ import {
 } from './ui';
 
 const APP_ID = 'hexbloom';
+const MIN_PLAYERS = 2;
+const MAX_PLAYERS = 4;
 const RIVAL_NAMES = ['Vero', 'Cyra', 'Juno'];
 const NAME_POOL = ['Fox', 'Wren', 'Sage', 'Koi', 'Lark', 'Bea', 'Nova', 'Pip', 'Ozzy', 'Rio'];
 
@@ -58,6 +67,8 @@ const settings = {
   symbols: store.get('symbols', false),
 };
 const sfx = createSfx(settings.muted);
+const reducedMotion =
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const app = document.getElementById('app')!;
 app.innerHTML = `<main class="main-content" id="content"></main>${FOOTER_HTML}`;
@@ -65,11 +76,24 @@ const content = document.getElementById('content')!;
 
 let net: Net | null = null;
 let rounds: Rounds | null = null;
-let lobbyView: { destroy: () => void } | null = null;
+let lobbyView: { destroy: () => void; repaint: () => void } | null = null;
 let roomEntry: { destroy: () => void } | null = null;
 let activeNetGame: NetGame | null = null;
 let session: GameSession | null = null;
+let countdown: { cancel: () => void } | null = null;
+let listing: Listing | null = null;
+let listingTick: ReturnType<typeof setInterval> | undefined;
+/** The room we are in, and whether it is on the public list. Private by default. */
 let roomCode = '';
+let roomPublic = false;
+
+/** The mode this player last chose. The HOST's choice is what a room plays. */
+let modeId: ModeId = modeOf(store.get<string>('mode', DEFAULT_MODE)).id;
+
+function setMode(id: ModeId): void {
+  modeId = modeOf(id).id;
+  store.set('mode', modeId);
+}
 
 /** A ?room= in the URL (an invite link) is honoured once; after that "Play with
  *  friends" shows the create/join screen, so the link is never the only way in. */
@@ -107,6 +131,159 @@ function playerName(): string {
   return n;
 }
 
+
+// ---------------------------------------------------------------------------
+// Mode picker — the host's pick is the room's pick.
+// ---------------------------------------------------------------------------
+
+function modePicker(): string {
+  const m = modeOf(modeId);
+  return `
+    <div class="modes" role="radiogroup" aria-label="Board">
+      ${MODE_LIST.map(
+        (x) => `<button class="mode-chip${x.id === m.id ? ' on' : ''}" type="button"
+          role="radio" aria-checked="${x.id === m.id}" data-mode="${x.id}">
+          <span class="mode-name">${escapeHtml(x.name)}</span>
+          <span class="mode-meta">${x.w}×${x.h} · ${x.colors} colours</span>
+        </button>`,
+      ).join('')}
+      <p class="mode-blurb">${escapeHtml(m.blurb)}</p>
+    </div>`;
+}
+
+function modeNote(): string {
+  // The HOST's gossiped choice — never our own local pick. Rendering `modeId`
+  // here would confidently tell a guest "Host picked Skirmish" while the host
+  // was actually setting up a 13×11 Wilds.
+  const hostOpts = rounds?.state().hostOpts as { mode?: unknown; pub?: unknown } | null | undefined;
+  if (hostOpts == null) return `<p class="mode-note">Waiting for the host’s pick…</p>`;
+  const m = modeOf(hostOpts.mode);
+  return (
+    `<p class="mode-note">Host picked <strong>${escapeHtml(m.name)}</strong> · ${m.w}×${m.h} · ${
+      m.colors
+    } colours</p>` +
+    // Someone who was handed an invite link has no way of knowing strangers can
+    // walk in unless we say so.
+    (hostOpts.pub
+      ? `<p class="mode-note pub">This room is listed publicly — anyone browsing can join.</p>`
+      : '')
+  );
+}
+
+function wireModePicker(repaint: () => void): void {
+  for (const btn of content.querySelectorAll<HTMLButtonElement>('.mode-chip')) {
+    btn.addEventListener('click', () => {
+      setMode(btn.dataset.mode as ModeId);
+      sfx.play('blip');
+      repaint();
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public / private.
+// ---------------------------------------------------------------------------
+
+/** The host's own control, in the lobby: a room can be taken off the list again. */
+function visibilityPicker(): string {
+  const chip = (pub: boolean, name: string, meta: string): string =>
+    `<button class="vis-chip${roomPublic === pub ? ' on' : ''}" type="button"
+      role="radio" aria-checked="${roomPublic === pub}" data-pub="${pub ? 1 : 0}">
+      <span class="vis-name">${escapeHtml(name)}</span>
+      <span class="vis-meta">${escapeHtml(meta)}</span>
+    </button>`;
+  return `
+    <div class="vis" role="radiogroup" aria-label="Who can join">
+      ${chip(false, 'Private', 'Invite only')}
+      ${chip(true, 'Public', 'Listed for anyone')}
+    </div>
+    <p class="re-note">${escapeHtml(P2P_IP_NOTE)}</p>`;
+}
+
+function wireVisibility(repaint: () => void): void {
+  for (const btn of content.querySelectorAll<HTMLButtonElement>('.vis-chip')) {
+    btn.addEventListener('click', () => {
+      roomPublic = btn.dataset.pub === '1';
+      sfx.play('blip');
+      // Immediately, not on the next tick: "private" has to mean off the list
+      // now, not within a second.
+      syncListing();
+      repaint();
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The public room list.
+//
+// At most one board, held only while something is actually using it — browsing
+// the list, or listing our own room. It is a mesh of STRANGERS (see P2P_IP_NOTE),
+// so it is never opened by the page loading and never left running behind a
+// screen the player has walked away from.
+// ---------------------------------------------------------------------------
+
+let board: Noticeboard | null = null;
+let boardRooms: ((rooms: PublicRoom[]) => void) | null = null;
+/** Serialises open/close. net.ts throws if the board's room is rejoined while the
+ *  last one is still tearing down, and browse → back → browse is two taps. */
+let boardQueue: Promise<void> = Promise.resolve();
+
+function onBoard(then: () => void): Promise<void> {
+  boardQueue = boardQueue
+    .then(() => {
+      board ??= createNoticeboard({ appId: APP_ID, onRooms: (r) => boardRooms?.(r) });
+      then();
+    })
+    .then(
+      () => undefined,
+      (e) => console.error(e),
+    );
+  return boardQueue;
+}
+
+const boardAccess: BoardAccess = {
+  open(onRooms) {
+    boardRooms = onRooms;
+    // Hand over whatever is already known so the list is not blank for a cycle.
+    return onBoard(() => onRooms(board!.rooms()));
+  },
+  announce(ad) {
+    return onBoard(() => board!.announce(ad));
+  },
+  close() {
+    boardRooms = null;
+    const b = board;
+    board = null;
+    if (!b) return;
+    // CHAIN, never replace — same trap as roomTeardown below.
+    boardQueue = boardQueue.then(() => b.destroy()).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
+};
+
+/** Feed engine/lobby.ts's roomAd() rule the room's current truth. It decides. */
+function syncListing(): void {
+  if (!listing) return;
+  if (!net || !rounds) {
+    listing.close();
+    return;
+  }
+  const s = rounds.state();
+  listing.sync({
+    isPublic: roomPublic,
+    isHost: net.isHost(),
+    inLobby: !!lobbyView,
+    playing: s.phase === 'playing',
+    code: roomCode,
+    host: playerName(),
+    players: s.present.length,
+    max: MAX_PLAYERS,
+    note: modeOf(modeId).name,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Drivers: a common surface for solo and multiplayer games.
 // ---------------------------------------------------------------------------
@@ -133,10 +310,14 @@ class SoloDriver implements Driver {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private _names: string[];
 
-  constructor(private opts: { rivals: number; difficulty: Difficulty }) {
-    const players = opts.rivals + 1;
-    this.state = generateBoard(newSeed(), { players });
+  constructor(private opts: { rivals: number; difficulty: Difficulty; mode: Mode }) {
+    this.state = this.fresh();
     this._names = ['You', ...RIVAL_NAMES.slice(0, opts.rivals)];
+  }
+
+  private fresh(): GameState {
+    const { w, h, colors } = this.opts.mode;
+    return generateBoard(newSeed(), { w, h, colors, players: this.opts.rivals + 1 });
   }
 
   getState() {
@@ -190,7 +371,7 @@ class SoloDriver implements Driver {
   restart() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    this.state = generateBoard(newSeed(), { players: this.opts.rivals + 1 });
+    this.state = this.fresh();
     this.cb(this.state, { absorbed: [], mover: -1 });
     this.advance();
   }
@@ -262,6 +443,8 @@ class GameSession {
   private countedTurn = 0;
   /** Last rendered bloom reach; -1 until the first paint so we don't chime on it. */
   private lastReach = -1;
+  /** True while the countdown is running — the board is up, the palette is not. */
+  private locked = false;
   private againTick: ReturnType<typeof setInterval> | null = null;
 
   constructor(private driver: Driver) {
@@ -318,14 +501,22 @@ class GameSession {
     if (b) b.textContent = sfx.muted() ? '🔇' : '🔊';
   }
 
+  /** Gate input without hiding the board — see the countdown in enterMpGame(). */
+  setLocked(on: boolean) {
+    this.locked = on;
+    this.refresh(this.driver.getState());
+  }
+
   private pick(color: number) {
-    if (!this.driver.isMyTurn()) return;
+    if (this.locked || !this.driver.isMyTurn()) return;
     sfx.play('select');
     this.driver.play(color);
   }
 
   private handleKey(e: KeyboardEvent) {
-    if (e.key >= '1' && e.key <= '6') {
+    if (e.key >= '1' && e.key <= '9') {
+      // Not a fixed 1-6: Wilds paints in seven, and a hard-coded range would
+      // silently make the last swatch keyboard-only-unreachable.
       const c = Number(e.key) - 1;
       if (c < this.driver.getState().colors) this.pick(c);
     } else if (e.key.toLowerCase() === 'r' && this.driver.mode === 'solo') {
@@ -435,7 +626,7 @@ class GameSession {
     const pal = document.getElementById('palette');
     if (!pal) return;
     const me = this.driver.myPlayer();
-    const myTurn = this.driver.isMyTurn();
+    const myTurn = this.driver.isMyTurn() && !this.locked;
     const myColor = me >= 0 ? state.color[me] : -1;
     let html = '';
     for (let c = 0; c < state.colors; c++) {
@@ -673,7 +864,21 @@ function leaveRoom(): Promise<void> {
   rounds = null;
   activeNetGame?.destroy();
   activeNetGame = null;
+  // Off the list and off the board, before anything else can go wrong. Leaving is
+  // one of the three ways a room stops being public (the others are going private
+  // and starting a round) and it is the one where nobody is left to notice a
+  // stale listing.
+  listing?.close();
+  listing = null;
+  if (listingTick) clearInterval(listingTick);
+  listingTick = undefined;
+  roomPublic = false;
   roomCode = '';
+  // Also covers a board opened by the browse screen: leaveRoom() is on every path
+  // out of it.
+  boardAccess.close();
+  countdown?.cancel();
+  countdown = null;
   // The room is over for us — take it out of the URL so a refresh, or reopening
   // from the home screen, lands on the menu instead of silently rejoining.
   clearRoomInUrl();
@@ -733,6 +938,16 @@ function renderSoloSetup(): void {
   let rivals = defaults.rivals;
   let difficulty = defaults.difficulty;
 
+  // The board picker is the same control as the lobby's, and writes the same
+  // stored pick — so the mode you play solo is the one you'd host with.
+  const mount = content.querySelector<HTMLElement>('#soloModes');
+  const paintModes = () => {
+    if (!mount) return;
+    mount.innerHTML = modePicker();
+    wireModePicker(paintModes);
+  };
+  paintModes();
+
   content.querySelector('[data-act="back"]')?.addEventListener('click', renderMenu);
   content.querySelectorAll<HTMLButtonElement>('[data-rivals]').forEach((b) =>
     b.addEventListener('click', () => {
@@ -751,7 +966,7 @@ function renderSoloSetup(): void {
   content.querySelector('[data-act="start"]')?.addEventListener('click', () => {
     store.set('solo', { rivals, difficulty });
     cleanupSession();
-    session = new GameSession(new SoloDriver({ rivals, difficulty }));
+    session = new GameSession(new SoloDriver({ rivals, difficulty, mode: modeOf(modeId) }));
   });
 }
 
@@ -764,7 +979,7 @@ function enterFriends(): void {
   if (pendingRoom) {
     const code = pendingRoom;
     pendingRoom = null;
-    void openRoom(code, false);
+    void openRoom(code, false, false);
     return;
   }
 
@@ -778,10 +993,13 @@ function enterFriends(): void {
     </section>`;
   content.querySelector('[data-act="back"]')?.addEventListener('click', toMenu);
 
+  // Handing the entry `board` is what makes public rooms exist at all — it does
+  // not join anything until the player taps Browse.
   roomEntry = createRoomEntry({
     container: document.getElementById('entryMount')!,
     subtitle: 'Start a new room, or enter a friend’s code to join theirs.',
-    onSubmit: (code, created) => void openRoom(code, created),
+    board: boardAccess,
+    onSubmit: (code, created, isPublic) => void openRoom(code, created, isPublic),
   });
 }
 
@@ -790,13 +1008,18 @@ function enterFriends(): void {
  * first and every rematch — runs inside this one Net via `rounds`. Nothing here
  * may call net.leave() except the trip back to the menu.
  */
-async function openRoom(code: string, created: boolean): Promise<void> {
+async function openRoom(code: string, created: boolean, isPublic: boolean): Promise<void> {
   leaveRoom();
   // A previous room may still be tearing down (Trystero defers it ~99ms). Joining
   // inside that window returns the dying room, so wait it out.
   await roomTeardown;
+  // The public flag stays OUT of the URL. It is the host's live choice, not a
+  // property of the code: baked into an invite link it would survive the host
+  // flipping the room private, and every guest who forwarded the link would be
+  // handing on a claim that is no longer true.
   setRoomInUrl(code);
   roomCode = code;
+  roomPublic = created && isPublic;
 
   try {
     net = createNet(
@@ -824,9 +1047,19 @@ async function openRoom(code: string, created: boolean): Promise<void> {
   rounds = createRounds({
     net,
     playerName: playerName(),
-    minPlayers: 2,
-    onRound: ({ seed, players }) => enterMpGame(seed, players),
+    minPlayers: MIN_PLAYERS,
+    // Only the host's pick counts, and it travels frozen with the start — a mode
+    // each peer read from its own UI is a mode two peers can disagree about.
+    // `pub` rides along so a guest can see that strangers may walk in; it is
+    // gossiped with presence, so it is live rather than a claim from join time.
+    roundOpts: () => ({ mode: modeId, pub: roomPublic }),
+    onRound: ({ seed, players, opts }) => enterMpGame(seed, players, opts),
   });
+
+  listing = createListing(boardAccess);
+  // Player counts move, the host can flip the room private, and the host role
+  // itself can transfer mid-lobby. Poll one rule rather than hunt every edge.
+  listingTick = setInterval(syncListing, 1000);
 
   showLobby();
 }
@@ -846,9 +1079,17 @@ function showLobby(): void {
     net,
     rounds,
     roomCode,
-    minPlayers: 2,
-    maxPlayers: 4,
+    minPlayers: MIN_PLAYERS,
+    maxPlayers: MAX_PLAYERS,
+    // Only the host chooses; everyone else sees what they are about to play, so
+    // nobody is surprised by a 13×11 board they did not pick.
+    modeSlot: () => (net!.isHost() ? modePicker() + visibilityPicker() : modeNote()),
+    onModeMount: () => {
+      wireModePicker(() => lobbyView?.repaint());
+      wireVisibility(() => lobbyView?.repaint());
+    },
   });
+  syncListing();
 }
 
 /**
@@ -863,10 +1104,16 @@ function backToLobby(): void {
   showLobby();
 }
 
-function enterMpGame(seed: number, players: RoundPlayer[]): void {
+function enterMpGame(seed: number, players: RoundPlayer[], opts: unknown): void {
   if (!net) return;
   lobbyView?.destroy();
   lobbyView = null;
+  // The round is starting, so the room comes off the list right now — not up to a
+  // tick later, and not "once someone notices". syncListing reads `lobbyView`,
+  // which is the null above.
+  syncListing();
+  countdown?.cancel();
+  countdown = null;
 
   // The roster arrives frozen from the host — identical bytes on every peer — so
   // seat N is the same player everywhere. Each peer deriving it locally is how
@@ -883,15 +1130,40 @@ function enterMpGame(seed: number, players: RoundPlayer[]): void {
 
   cleanupSession();
   activeNetGame = null;
+
+  // Roster AND mode arrive frozen from the host, identical bytes on every peer, so
+  // seat N is the same player and everyone builds the same honeycomb. Deriving
+  // either locally is how peers end up in different games.
+  const m = modeOf((opts as { mode?: unknown } | undefined)?.mode);
+
   const driver = new MpDriver(players.map((p) => p.name));
   activeNetGame = new NetGame({
     net,
     seed,
     seats,
-    onUpdate: (s, m) => driver.forward(s, m),
+    board: { w: m.w, h: m.h, colors: m.colors },
+    onUpdate: (s, m2) => driver.forward(s, m2),
   });
   driver.attach(activeNetGame);
   session = new GameSession(driver);
+
+  // The board is up and readable behind the count, but the palette is not live
+  // yet: everyone gets the same look at the honeycomb before anyone can take a
+  // tile off it. Each peer counts locally from the host's start arriving.
+  const cdHost = document.createElement('div');
+  cdHost.className = 'cd-host';
+  content.querySelector('.game')?.appendChild(cdHost);
+  session.setLocked(true);
+  countdown = createCountdown({
+    root: cdHost,
+    sfx,
+    reducedMotion,
+    onDone: () => {
+      countdown = null;
+      cdHost.remove();
+      session?.setLocked(false);
+    },
+  });
 }
 
 // First visit: auto-show how to play.
