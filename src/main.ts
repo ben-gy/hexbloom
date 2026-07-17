@@ -20,13 +20,8 @@ import { newSeed } from './engine/rng';
 import { createSfx } from './engine/sound';
 import { createStore } from './engine/storage';
 import { createNet, type Net } from './engine/net';
-import {
-  createLobby,
-  createRoomEntry,
-  normalizeRoomCode,
-  setRoomInUrl,
-  type LobbyPlayer,
-} from './engine/lobby';
+import { createRounds, type RoundPlayer, type Rounds } from './engine/rematch';
+import { createLobby, createRoomEntry, normalizeRoomCode, setRoomInUrl } from './engine/lobby';
 import { NetGame } from './net-game';
 import { BoardView, PLAYER_ACCENTS, TILE_COLORS } from './render';
 import {
@@ -55,8 +50,15 @@ app.innerHTML = `<main class="main-content" id="content"></main>${FOOTER_HTML}`;
 const content = document.getElementById('content')!;
 
 let net: Net | null = null;
+let rounds: Rounds | null = null;
+let lobbyView: { destroy: () => void } | null = null;
+let roomEntry: { destroy: () => void } | null = null;
 let activeNetGame: NetGame | null = null;
 let session: GameSession | null = null;
+let roomCode = '';
+
+/** Resolves once any in-flight room teardown has fully finished. */
+let roomTeardown: Promise<void> = Promise.resolve();
 
 // Unlock audio on the first gesture (browsers block it until then).
 const unlockOnce = () => {
@@ -222,16 +224,29 @@ class MpDriver implements Driver {
 // In-game session: renders HUD + board + palette and reacts to state updates.
 // ---------------------------------------------------------------------------
 
+/** Per-player breakdown accumulated over a match, for the results screen. */
+interface PlayerStats {
+  moves: number;
+  taken: number;
+  best: number;
+}
+
 class GameSession {
   private board: BoardView;
   private onKey: (e: KeyboardEvent) => void;
   private resultsShown = false;
+  private stats: PlayerStats[] = [];
+  /** Highest turnNo already counted — snapshots can arrive twice (a re-sync
+   *  replays the current position), and a double count would inflate the stats. */
+  private countedTurn = 0;
+  private againTick: ReturnType<typeof setInterval> | null = null;
 
   constructor(private driver: Driver) {
     this.render();
     this.board = new BoardView(document.getElementById('board')!);
     this.board.setSymbols(settings.symbols);
     this.board.build(driver.getState());
+    this.resetStats(driver.getState());
     this.driver.setUpdate((s, m) => this.update(s, m));
     this.refresh(driver.getState());
     this.onKey = (e) => this.handleKey(e);
@@ -297,7 +312,25 @@ class GameSession {
     }
   }
 
+  /** Reset the breakdown for a fresh board (solo restart, or a new MP round). */
+  private resetStats(state: GameState) {
+    this.stats = Array.from({ length: state.players }, () => ({ moves: 0, taken: 0, best: 0 }));
+    this.countedTurn = state.turnNo;
+  }
+
+  private track(state: GameState, mover: number, absorbed: number) {
+    if (mover < 0 || state.turnNo <= this.countedTurn) return;
+    this.countedTurn = state.turnNo;
+    const st = this.stats[mover];
+    if (!st) return;
+    st.moves += 1;
+    st.taken += absorbed;
+    st.best = Math.max(st.best, absorbed);
+  }
+
   private update(state: GameState, meta: { absorbed: number[]; mover: number }) {
+    if (meta.mover < 0 && state.turnNo === 0) this.resetStats(state);
+    this.track(state, meta.mover, meta.absorbed.length);
     if (meta.absorbed.length && meta.mover >= 0) {
       const colorIdx = state.color[meta.mover];
       this.board.paint(state, meta.absorbed);
@@ -375,7 +408,12 @@ class GameSession {
     const win = winners(state);
     const me = this.driver.myPlayer();
     const ranked = Array.from({ length: state.players }, (_, p) => p).sort((a, b) => sc[b] - sc[a]);
-    const total = state.tile.length;
+    // Share of the tiles actually WON, not of the whole board: a game can end with
+    // neutral tiles still on it (a stalled board), and "31/81" then implies 81 was
+    // reachable and everyone underperformed. The claimed total is what was fought
+    // over, so the fractions sum to 1 and the winner's lead reads honestly.
+    const claimed = sc.reduce((a, b) => a + b, 0);
+    const neutral = state.tile.length - claimed;
 
     let headline: string;
     if (win.length > 1) headline = win.includes(me) ? "It's a tie!" : `Tie — ${names[win[0]]} & ${names[win[1]]}`;
@@ -397,6 +435,9 @@ class GameSession {
 
     sfx.play(win.includes(me) || me < 0 ? 'win' : 'lose');
 
+    const stat = (p: number): PlayerStats => this.stats[p] ?? { moves: 0, taken: 0, best: 0 };
+    const biggest = Math.max(0, ...ranked.map((p) => stat(p).best));
+
     const overlay = document.createElement('div');
     overlay.className = 'results-overlay';
     overlay.innerHTML = `
@@ -404,45 +445,103 @@ class GameSession {
         <h2 class="results-title">${headline}</h2>
         <ul class="results-list">
           ${ranked
-            .map(
-              (p, i) => `<li class="result-row ${p === me ? 'me' : ''}">
+            .map((p, i) => {
+              const st = stat(p);
+              const share = claimed > 0 ? Math.round((sc[p] / claimed) * 100) : 0;
+              return `<li class="result-row ${p === me ? 'me' : ''}">
                 <span class="result-rank">${i + 1}</span>
                 <span class="result-dot" style="background:${TILE_COLORS[state.color[p]]};border-color:${PLAYER_ACCENTS[p]}"></span>
-                <span class="result-name">${escapeHtml(names[p] ?? `P${p + 1}`)}${p === me ? ' (you)' : ''}</span>
-                <span class="result-score">${sc[p]}<small>/${total}</small></span>
-              </li>`,
-            )
+                <span class="result-main">
+                  <span class="result-name">${escapeHtml(names[p] ?? `P${p + 1}`)}${p === me ? ' (you)' : ''}</span>
+                  <span class="result-detail">
+                    +${st.taken} taken · best bloom +${st.best}${st.best === biggest && st.best > 0 ? ' 🏅' : ''} · ${st.moves} move${st.moves === 1 ? '' : 's'}
+                  </span>
+                </span>
+                <span class="result-score">${sc[p]}<small>/${claimed} · ${share}%</small></span>
+              </li>`;
+            })
             .join('')}
         </ul>
+        <p class="results-note">${
+          neutral > 0
+            ? `${neutral} tile${neutral === 1 ? '' : 's'} left unclaimed — nobody could reach ${neutral === 1 ? 'it' : 'them'}.`
+            : 'Every tile on the board was claimed.'
+        }</p>
         <div class="results-actions">
-          <button class="btn btn-primary" data-act="again">${this.driver.mode === 'solo' ? 'Play again' : 'Back to menu'}</button>
+          <button class="btn btn-primary" data-act="again">Play again</button>
           <button class="btn" data-act="share">Share</button>
-          ${this.driver.mode === 'solo' ? '<button class="btn btn-ghost" data-act="menu">Menu</button>' : ''}
+          <button class="btn btn-ghost" data-act="menu">Menu</button>
         </div>
+        ${this.driver.mode === 'mp' ? '<p class="again-status" role="status" aria-live="polite"></p>' : ''}
       </div>`;
     content.querySelector('.game')?.appendChild(overlay);
 
-    overlay.querySelector('[data-act="again"]')?.addEventListener('click', () => {
-      overlay.remove();
-      this.resultsShown = false;
-      if (this.driver.mode === 'solo') this.driver.restart?.();
-      else toMenu();
+    const againBtn = overlay.querySelector<HTMLButtonElement>('[data-act="again"]')!;
+    const status = overlay.querySelector<HTMLElement>('.again-status');
+
+    // The round is over: reopen voting so "Play again" has something to vote for.
+    if (this.driver.mode === 'mp') rounds?.finish();
+
+    const paintAgain = () => {
+      if (!rounds) return;
+      const s = rounds.state();
+      againBtn.textContent = s.voted ? 'Ready — waiting…' : 'Play again';
+      againBtn.classList.toggle('waiting', s.voted);
+      if (!status) return;
+      const waiting = s.present.length - s.votes.length;
+      status.textContent = s.voted
+        ? waiting > 0
+          ? `Waiting for ${waiting} more player${waiting === 1 ? '' : 's'}…`
+          : 'Starting…'
+        : `${s.votes.length}/${s.present.length} ready for another round`;
+    };
+
+    againBtn.addEventListener('click', () => {
+      if (this.driver.mode === 'solo') {
+        overlay.remove();
+        this.resultsShown = false;
+        this.driver.restart?.();
+        return;
+      }
+      // NOT a rejoin. The room and the whole peer mesh stay exactly as they are;
+      // this only registers a vote, and the next round starts underneath us once
+      // everyone has voted. Leaving and rejoining here is what stranded both
+      // players alone as host — see engine/net.ts.
+      if (!rounds) return;
+      if (rounds.state().voted) rounds.unvote();
+      else rounds.vote();
+      paintAgain();
     });
+
+    if (this.driver.mode === 'mp') {
+      paintAgain();
+      this.againTick = setInterval(() => {
+        if (!document.body.contains(againBtn)) {
+          if (this.againTick) clearInterval(this.againTick);
+          this.againTick = null;
+          return;
+        }
+        paintAgain();
+      }, 500);
+    }
+
     overlay.querySelector('[data-act="menu"]')?.addEventListener('click', () => toMenu());
     overlay.querySelector('[data-act="share"]')?.addEventListener('click', () => {
-      void shareResult(sc[me >= 0 ? me : 0], total);
+      void shareResult(sc[me >= 0 ? me : 0], claimed);
     });
   }
 
   destroy() {
     document.removeEventListener('keydown', this.onKey);
+    if (this.againTick) clearInterval(this.againTick);
+    this.againTick = null;
     this.board.destroy();
     this.driver.destroy();
   }
 }
 
-async function shareResult(myScore: number, total: number): Promise<void> {
-  const text = `I claimed ${myScore}/${total} tiles in Hexbloom 🐝`;
+async function shareResult(myScore: number, claimed: number): Promise<void> {
+  const text = `I claimed ${myScore}/${claimed} tiles in Hexbloom 🐝`;
   const url = 'https://hexbloom.benrichardson.dev';
   try {
     if (navigator.share) {
@@ -484,15 +583,34 @@ function cleanupSession(): void {
   session = null;
 }
 
-function cleanupMp(): void {
+/**
+ * Tear the room down for good. Only ever called on the way to the menu — NEVER
+ * between rounds. `net.leave()` is awaited because Trystero keeps the room in its
+ * cache until teardown finishes; joining again before then hands back the dying
+ * room and every peer ends up alone and self-elected as host. A rematch keeps the
+ * Net alive and starts a new round inside it (engine/rematch.ts).
+ */
+function leaveRoom(): Promise<void> {
+  lobbyView?.destroy();
+  lobbyView = null;
+  roomEntry?.destroy();
+  roomEntry = null;
+  rounds?.destroy();
+  rounds = null;
   activeNetGame?.destroy();
   activeNetGame = null;
-  try {
-    net?.leave();
-  } catch {
-    /* ignore */
-  }
+  roomCode = '';
+  const leaving = net;
   net = null;
+  // CHAIN, never replace. leaveRoom() runs again on the way into a new room, and
+  // by then `net` is already null — replacing the promise there would hand back an
+  // instantly-resolved teardown while the real one was still inside Trystero's
+  // 99ms window, and the next createNet would throw.
+  roomTeardown = roomTeardown.then(() => leaving?.leave()).then(
+    () => undefined,
+    () => undefined,
+  );
+  return roomTeardown;
 }
 
 /** Drop a stale ?room= so a fresh solo/menu session doesn't carry it. */
@@ -506,7 +624,7 @@ function stripRoomParam(): void {
 
 function toMenu(): void {
   cleanupSession();
-  cleanupMp();
+  void leaveRoom();
   stripRoomParam();
   renderMenu();
 }
@@ -571,13 +689,13 @@ function renderSoloSetup(): void {
 }
 
 function enterFriends(): void {
-  cleanupMp();
+  void leaveRoom();
 
   // Deep-linked via an invite (?room=)? Join it straight away. Otherwise show
   // the create/join screen so a friend can type the code, not just tap the link.
   const deep = normalizeRoomCode(new URL(location.href).searchParams.get('room') ?? '');
   if (deep.length >= 3) {
-    openRoom(deep);
+    void openRoom(deep);
     return;
   }
 
@@ -588,24 +706,53 @@ function enterFriends(): void {
     </section>`;
   content.querySelector('[data-act="back"]')?.addEventListener('click', toMenu);
 
-  createRoomEntry({
+  roomEntry = createRoomEntry({
     container: document.getElementById('entryMount')!,
     subtitle: 'Start a new room, or enter a friend’s code to join theirs.',
-    onSubmit: (code) => openRoom(code),
+    onSubmit: (code) => void openRoom(code),
   });
 }
 
-function openRoom(code: string): void {
-  cleanupMp();
+/**
+ * Join a room ONCE and hold it for as long as the player stays. Every round — the
+ * first and every rematch — runs inside this one Net via `rounds`. Nothing here
+ * may call net.leave() except the trip back to the menu.
+ */
+async function openRoom(code: string): Promise<void> {
+  leaveRoom();
+  // A previous room may still be tearing down (Trystero defers it ~99ms). Joining
+  // inside that window returns the dying room, so wait it out.
+  await roomTeardown;
   setRoomInUrl(code);
-  net = createNet(
-    { appId: APP_ID, roomId: code },
-    {
-      onHostChange: (_id, isSelf) => activeNetGame?.onHostChanged(isSelf),
-      onPeers: () => activeNetGame?.onRoster(),
-    },
-  );
+  roomCode = code;
 
+  try {
+    net = createNet(
+      { appId: APP_ID, roomId: code },
+      { onPeers: () => activeNetGame?.onRoster() },
+    );
+  } catch (err) {
+    // The room is somehow still held (see engine/net.ts). Never strand the player
+    // on a blank screen — say so and go back somewhere they can act.
+    console.error(err);
+    flashToast('Could not open that room — try again');
+    toMenu();
+    return;
+  }
+
+  rounds = createRounds({
+    net,
+    playerName: playerName(),
+    minPlayers: 2,
+    onRound: ({ seed, players }) => enterMpGame(seed, players),
+  });
+
+  showLobby();
+}
+
+function showLobby(): void {
+  if (!net || !rounds) return;
+  lobbyView?.destroy();
   content.innerHTML = `
     <section class="screen lobby-screen">
       <button class="back" data-act="back" aria-label="Back to menu">‹ Menu</button>
@@ -613,34 +760,44 @@ function openRoom(code: string): void {
     </section>`;
   content.querySelector('[data-act="back"]')?.addEventListener('click', toMenu);
 
-  const mount = document.getElementById('lobbyMount')!;
-  const lobby = createLobby({
-    container: mount,
+  lobbyView = createLobby({
+    container: document.getElementById('lobbyMount')!,
     net,
-    roomCode: code,
-    playerName: playerName(),
+    rounds,
+    roomCode,
     minPlayers: 2,
     maxPlayers: 4,
-    onStart: (info) => {
-      lobby.destroy();
-      enterMpGame(info.seed, info.players);
-    },
   });
 }
 
-function enterMpGame(seed: number, players: LobbyPlayer[]): void {
-  const seated = [...players].sort((a, b) => a.id.localeCompare(b.id));
-  const seats = seated.map((p) => p.id);
-  const names = seated.map((p) => p.name);
-  const driver = new MpDriver(names);
+function enterMpGame(seed: number, players: RoundPlayer[]): void {
+  if (!net) return;
+  lobbyView?.destroy();
+  lobbyView = null;
+
+  // The roster arrives frozen from the host — identical bytes on every peer — so
+  // seat N is the same player everywhere. Each peer deriving it locally is how
+  // scores used to land on the wrong name.
+  const seats = players.map((p) => p.id);
+  if (!seats.includes(net.selfId)) {
+    // Not in this round's roster (we walked in mid-start). Wait for the next round
+    // rather than silently playing as player 0.
+    cleanupSession();
+    showLobby();
+    flashToast('Next round — you’re in the lobby');
+    return;
+  }
+
+  cleanupSession();
+  activeNetGame = null;
+  const driver = new MpDriver(players.map((p) => p.name));
   activeNetGame = new NetGame({
-    net: net!,
+    net,
     seed,
     seats,
     onUpdate: (s, m) => driver.forward(s, m),
   });
   driver.attach(activeNetGame);
-  cleanupSession();
   session = new GameSession(driver);
 }
 

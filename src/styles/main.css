@@ -915,9 +915,36 @@ kbd {
   border-radius: 50%;
   border: 2px solid #fff;
 }
-.result-name {
+.result-main {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.result-name {
   font-weight: 600;
+}
+.result-detail {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.results-note {
+  margin: -8px 0 16px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: center;
+}
+.again-status {
+  margin: 10px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  min-height: 1.1em;
+}
+.btn.waiting {
+  opacity: 0.75;
 }
 .result-score {
   font-weight: 800;
