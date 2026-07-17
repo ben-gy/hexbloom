@@ -9,12 +9,16 @@
  * `nostr` (public Nostr relays); swap the import for `trystero/torrent` or
  * `trystero/mqtt` if relays are flaky in your region (see README).
  *
- * Netcode model this wrapper assumes: **host-authoritative star**. Every peer
- * runs the same election (lexicographically smallest peer id, self included) so
- * they all independently agree on who the host is — no handshake needed, and it
- * re-elects automatically when the host leaves. The host owns authoritative game
- * state and broadcasts snapshots; clients send inputs. For deterministic
- * lockstep games, pair this with rng.ts (shared seed) instead.
+ * Netcode model this wrapper assumes: **host-authoritative star**. The host owns
+ * authoritative game state and broadcasts snapshots; clients send inputs. For
+ * deterministic lockstep games, pair this with rng.ts (shared seed) instead.
+ *
+ * The host is decided by INCUMBENCY, not by an election on every join: whoever
+ * holds the room announces it, everyone else adopts, and the role only moves
+ * when the host LEAVES (then min-id among the survivors, which they all compute
+ * identically). A peer that has heard nothing yet is `unsettled` — isHost() is
+ * false and host() is null — so nobody can act as host on a mesh that has not
+ * formed. See the host section below for why both of those matter.
  *
  * Trystero limits to remember:
  *  - Action names (channels) must be <= 12 bytes. Keep them short: 'mv','snap'.
@@ -54,6 +58,13 @@ export interface NetConfig {
   /** Optional shared secret — end-to-end encrypts signaling AND data channels.
    *  Derive it from a code in the invite link for private rooms. */
   password?: string;
+  /**
+   * True only when THIS peer minted the code ("Create a room"). It then hosts
+   * immediately instead of waiting to hear from an incumbent. Anyone arriving
+   * via a link, a typed code, or the public list must leave this false, or two
+   * peers will race to host the same room.
+   */
+  claimHost?: boolean;
 }
 
 export interface NetHandlers {
@@ -75,10 +86,20 @@ export interface Net {
   readonly selfId: PeerId;
   /** All connected peers plus self, sorted — identical order on every client. */
   peers(): PeerId[];
-  /** The currently elected host id. */
-  host(): PeerId;
-  /** True when THIS peer is the authoritative host. */
+  /** The current host, or null while the room is still settling. */
+  host(): PeerId | null;
+  /**
+   * True when THIS peer is the authoritative host. FALSE until the room has
+   * settled, so a peer whose mesh has not formed never acts as host — that is
+   * what stops two players each hosting their own half of a broken room.
+   */
   isHost(): boolean;
+  /**
+   * False for the first moments in a room, while we wait to hear from an
+   * incumbent host. Render "connecting…" rather than a host badge until this is
+   * true, and gate any host-only control on it.
+   */
+  hostSettled(): boolean;
   /** How many are in the room right now (peers + self). */
   count(): number;
   /**
@@ -174,32 +195,87 @@ export function createNet(config: NetConfig, handlers: NetHandlers = {}): Net {
     handlers: Set<(data: never, from: PeerId) => void>;
   }
   const chans = new Map<string, Chan>();
-  let currentHost: PeerId = selfId;
+  // ── host: incumbency, not a re-election on every join ──────────────────────
+  // The old rule was "host = smallest peer id among live peers", recomputed on
+  // every join. That silently handed the room to whoever arrived next if their
+  // id happened to sort lower — a coin flip on every join, and the new host held
+  // none of the game state. Worse, each peer seeded itself as host on join, so
+  // during the seconds before the mesh forms EVERY peer paints itself host; if
+  // discovery is slow or fails (a phone on a bad network), that is permanent and
+  // looks exactly like "we're both host and can't see each other".
+  //
+  // So: the host ANNOUNCES and everyone else ADOPTS. A joiner is `unsettled`
+  // until it hears an announce — isHost() is false and callers render
+  // "connecting", so nobody can act as host on a mesh that has not formed. The
+  // incumbent keeps the role for as long as it is in the room. Only when it
+  // LEAVES do the survivors elect again (min-id, which they all agree on).
+  let currentHost: PeerId | null = null;
+  let settled = false;
+  let announceTimer: ReturnType<typeof setInterval> | undefined;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   const roster = (): PeerId[] => [selfId, ...Object.keys(room.getPeers())].sort();
 
-  function recomputeHost(): void {
-    const next = electHost(roster());
-    if (next !== currentHost) {
-      currentHost = next;
-      handlers.onHostChange?.(currentHost, currentHost === selfId);
-    }
+  const [sendHost, getHost] = room.makeAction<{ host: PeerId }>('__h');
+
+  function setHost(next: PeerId): void {
+    const changed = next !== currentHost || !settled;
+    currentHost = next;
+    settled = true;
+    if (next === selfId) startAnnouncing();
+    else stopAnnouncing();
+    if (changed) handlers.onHostChange?.(next, next === selfId);
   }
 
-  // Seed the initial host (self, until peers arrive) so callers can render state
-  // on the very first frame without waiting for a peer event.
-  handlers.onHostChange?.(currentHost, true);
+  function startAnnouncing(): void {
+    if (announceTimer) return;
+    sendHost({ host: selfId });
+    announceTimer = setInterval(() => sendHost({ host: selfId }), 2000);
+  }
+
+  function stopAnnouncing(): void {
+    if (announceTimer) clearInterval(announceTimer);
+    announceTimer = undefined;
+  }
+
+  getHost((msg, from) => {
+    // Trust only a peer claiming itself, so a stale forward cannot install a
+    // host nobody can see.
+    if (msg.host !== from) return;
+    if (!settled) return setHost(from);
+    if (from === currentHost) return;
+    // Two peers both believe they host this room — they created it in the same
+    // instant, or a partition just healed. Both sides apply the same rule, so
+    // they converge without a negotiation.
+    setHost(from < currentHost! ? from : currentHost!);
+  });
+
+  if (config.claimHost) {
+    // This peer minted the code, so there is no incumbent to defer to. Claiming
+    // straight away keeps "Create a room" instant. If the code collides with a
+    // live room, the announce exchange above still converges everyone onto one.
+    setHost(selfId);
+  } else {
+    // Give the incumbent a moment to announce. If nothing arrives, this room has
+    // no host — fall back to the election everyone can compute identically.
+    settleTimer = setTimeout(() => {
+      if (!settled) setHost(electHost(roster()));
+    }, 2500);
+  }
 
   room.onPeerJoin((id) => {
     handlers.onPeerJoin?.(id);
     handlers.onPeers?.(roster(), selfId);
-    recomputeHost();
+    // Deliberately NOT a re-election — incumbency is the whole point. Just tell
+    // the newcomer who is in charge so it can settle without waiting out its timer.
+    if (settled && currentHost === selfId) sendHost({ host: selfId }, id);
   });
 
   room.onPeerLeave((id) => {
     handlers.onPeerLeave?.(id);
     handlers.onPeers?.(roster(), selfId);
-    recomputeHost();
+    // The one case where the host legitimately changes.
+    if (id === currentHost) setHost(electHost(roster()));
   });
 
   // Built-in ping/pong channel for latency HUDs and lag compensation.
@@ -221,7 +297,8 @@ export function createNet(config: NetConfig, handlers: NetHandlers = {}): Net {
     selfId,
     peers: roster,
     host: () => currentHost,
-    isHost: () => currentHost === selfId,
+    isHost: () => settled && currentHost === selfId,
+    hostSettled: () => settled,
     count: () => roster().length,
 
     channel<T = NetData>(name: string, onReceive: (data: T, from: PeerId) => void) {
@@ -278,6 +355,8 @@ export function createNet(config: NetConfig, handlers: NetHandlers = {}): Net {
       // until teardown completes, so any join in that window aliases the corpse.
       // The registry entry is what turns that silent trap into a thrown error.
       registry.set(key, 'leaving');
+      stopAnnouncing();
+      if (settleTimer) clearTimeout(settleTimer);
       try {
         await room.leave();
       } finally {

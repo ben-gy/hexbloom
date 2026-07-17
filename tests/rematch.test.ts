@@ -15,7 +15,7 @@
  *    unreachable — no network model required.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRounds, type RoundInfo } from '../src/engine/rematch';
 import type { Net, PeerId } from '../src/engine/net';
 
@@ -59,6 +59,7 @@ function mockNet(bus: Bus, selfId: PeerId): Net {
     // Same election rule as the real net.ts: lexicographically smallest id.
     host: () => bus.roster()[0],
     isHost: () => bus.roster()[0] === selfId,
+    hostSettled: () => true,
     count: () => bus.roster().length,
     channel<T>(name: string, onReceive: (d: T, from: PeerId) => void) {
       const off = bus.on(selfId, name, onReceive as (d: unknown, from: PeerId) => void);
@@ -256,5 +257,88 @@ describe('createRounds — teardown', () => {
 
     // A destroyed Rounds must not keep driving a screen that is gone.
     expect(seats[1].got.length).toBe(0);
+  });
+});
+
+describe('createRounds — never deadlock waiting for a vote that never comes', () => {
+  it('starts anyway once the grace countdown expires, without the silent player', () => {
+    vi.useFakeTimers();
+    seats = table(['a', 'b', 'c'], { minPlayers: 2 });
+    seats.forEach((s) => s.rounds.vote());
+    seats.forEach((s) => s.rounds.finish());
+
+    // Two of three hit "Play again". The third is still reading the summary.
+    // The OLD rule required unanimity, so this hung forever with no way out but
+    // the menu — the exact reported failure.
+    seats[0].rounds.vote();
+    seats[1].rounds.vote();
+    expect(seats[0].got.length).toBe(1); // not yet — the countdown is running
+
+    const s = seats[0].rounds.state();
+    expect(s.startsInMs).toBeGreaterThan(0); // and it is VISIBLE, not a silent hang
+
+    vi.advanceTimersByTime(8100);
+
+    expect(seats[0].got.length).toBe(2);
+    expect(seats[0].got[1].players.map((p) => p.id)).toEqual(['a', 'b']);
+    vi.useRealTimers();
+  });
+
+  it('goes immediately when everyone votes, with no countdown', () => {
+    vi.useFakeTimers();
+    seats = table(['a', 'b'], { minPlayers: 2 });
+    seats.forEach((s) => s.rounds.vote());
+    seats.forEach((s) => s.rounds.finish());
+    seats.forEach((s) => s.rounds.vote());
+
+    // Unanimity must not be punished with an 8s wait.
+    expect(seats[0].got.length).toBe(2);
+    expect(seats[0].rounds.state().startsInMs).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('lets the host force the rematch immediately with go()', () => {
+    seats = table(['a', 'b', 'c'], { minPlayers: 2 });
+    seats.forEach((s) => s.rounds.vote());
+    seats.forEach((s) => s.rounds.finish());
+
+    seats[0].rounds.vote();
+    seats[1].rounds.vote();
+    seats[0].rounds.go(); // host is not made to wait out the countdown
+
+    expect(seats[0].got.length).toBe(2);
+  });
+
+  it('cancels the countdown if quorum is lost again', () => {
+    vi.useFakeTimers();
+    seats = table(['a', 'b', 'c'], { minPlayers: 2 });
+    seats.forEach((s) => s.rounds.vote());
+    seats.forEach((s) => s.rounds.finish());
+
+    seats[0].rounds.vote();
+    seats[1].rounds.vote();
+    expect(seats[0].rounds.state().startsInMs).toBeGreaterThan(0);
+
+    seats[1].rounds.unvote(); // changed their mind
+    expect(seats[0].rounds.state().startsInMs).toBeNull();
+
+    vi.advanceTimersByTime(8100);
+    expect(seats[0].got.length).toBe(1); // no round started below quorum
+    vi.useRealTimers();
+  });
+
+  it('a peer who returns to the lobby mid-countdown still lands in the round', () => {
+    vi.useFakeTimers();
+    seats = table(['a', 'b', 'c'], { minPlayers: 2 });
+    seats.forEach((s) => s.rounds.vote());
+    seats.forEach((s) => s.rounds.finish());
+
+    seats[0].rounds.vote();
+    seats[1].rounds.vote();
+    seats[2].rounds.vote(); // the straggler taps just in time
+
+    expect(seats[2].got.length).toBe(2);
+    expect(seats[2].got[1].players.map((p) => p.id)).toEqual(['a', 'b', 'c']);
+    vi.useRealTimers();
   });
 });

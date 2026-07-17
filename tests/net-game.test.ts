@@ -41,14 +41,19 @@ class Bus {
   }
 }
 
-function mockNet(bus: Bus, selfId: PeerId): Net {
+/**
+ * `roomHost` stands in for net.ts's incumbent — the peer that has held the room
+ * since it was minted. Default: the pessimistic min-id rule, so the mid-game
+ * joiner below really does win the room and authority has to refuse it anyway.
+ */
+function mockNet(bus: Bus, selfId: PeerId, roomHost: () => PeerId | null = () => bus.roster()[0]): Net {
   bus.join(selfId);
   return {
     selfId,
     peers: () => bus.roster(),
-    // Identical rule to the real net.ts: lexicographically smallest id in the ROOM.
-    host: () => bus.roster()[0],
-    isHost: () => bus.roster()[0] === selfId,
+    host: roomHost,
+    isHost: () => roomHost() === selfId,
+    hostSettled: () => true,
     count: () => bus.roster().length,
     channel<T>(name: string, onReceive: (d: T, from: PeerId) => void) {
       const off = bus.on(selfId, name, onReceive as (d: unknown, from: PeerId) => void);
@@ -74,9 +79,9 @@ interface Peer {
 const SEED = 0xbeef;
 
 /** Seat every id in `seats` into one round of the same match. */
-function match(bus: Bus, seats: PeerId[]): Peer[] {
+function match(bus: Bus, seats: PeerId[], roomHost?: () => PeerId | null): Peer[] {
   return seats.map((id) => {
-    const net = mockNet(bus, id);
+    const net = mockNet(bus, id, roomHost);
     let last: GameState | null = null;
     const game = new NetGame({ net, seed: SEED, seats, onUpdate: (s) => (last = s) });
     return { id, net, game, state: () => last ?? game.getState() };
@@ -96,6 +101,45 @@ beforeEach(() => {
 describe('NetGame — round authority', () => {
   it('seats the lowest roster id as host, matching net.host() when nobody else is around', () => {
     const [m, z] = match(bus, ['m', 'z']);
+    expect(m.game.isHost()).toBe(true);
+    expect(z.game.isHost()).toBe(false);
+  });
+
+  it('gives the round to the ROOM\'s incumbent host, not to the lowest seat', () => {
+    // 'z' minted the room and still holds it, so it hosts the round even though
+    // 'm' sorts lower. There is one answer to "who is host", and this is it —
+    // two notions (net.host() vs lowest seat) would have the players' moves and
+    // the snapshots flowing to different peers.
+    const [m, z] = match(bus, ['m', 'z'], () => 'z');
+    expect(z.game.isHost()).toBe(true);
+    expect(m.game.isHost()).toBe(false);
+
+    m.game.play(pick(m.state(), 0)); // seat 0 asks the incumbent to apply it
+    expect(z.state().turnNo).toBe(1);
+    expect(m.state().turnNo).toBe(1);
+  });
+
+  it('hands the round on when the incumbent host leaves mid-match', () => {
+    // net.ts promotes a survivor when the host leaves; the round must follow it
+    // rather than sit waiting for a peer that is gone.
+    let incumbent: PeerId | null = 'z';
+    const [m, z] = match(bus, ['m', 'z'], () => incumbent);
+    expect(z.game.isHost()).toBe(true);
+    expect(m.game.isHost()).toBe(false);
+
+    void z.net.leave();
+    incumbent = 'm'; // min-id among the survivors, as net.ts elects
+    m.game.onRoster();
+
+    expect(m.game.isHost()).toBe(true);
+    m.game.play(pick(m.state(), 0));
+    expect(m.state().turnNo).toBe(1);
+  });
+
+  it('falls back to the lowest live seat while the room has no settled host', () => {
+    // host() is null for the first moments in a room. Every peer must still reach
+    // the same answer alone, or the opening position comes from two sources.
+    const [m, z] = match(bus, ['m', 'z'], () => null);
     expect(m.game.isHost()).toBe(true);
     expect(z.game.isHost()).toBe(false);
   });

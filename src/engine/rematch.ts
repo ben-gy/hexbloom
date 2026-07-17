@@ -66,6 +66,12 @@ export interface RoundsState {
   isHost: boolean;
   /** Host-only: enough votes to start (>= minPlayers). */
   canStart: boolean;
+  /**
+   * Ms until the round starts without the peers who have not voted, or null if
+   * no countdown is running. Render it — a silent wait is indistinguishable from
+   * a hang, which is exactly how the old unanimity rule felt.
+   */
+  startsInMs: number | null;
 }
 
 export interface RoundsConfig {
@@ -80,6 +86,12 @@ export interface RoundsConfig {
    * The host can always start early with `go()`.
    */
   autoStart?: boolean;
+  /**
+   * Once quorum is reached but some peers still have not voted, how long to hold
+   * the round for them before starting anyway. Default 8s. This is the escape
+   * hatch from waiting on a player who is never going to tap.
+   */
+  graceMs?: number;
   /** Fires on every peer, for every round, with identical seed + roster. */
   onRound: (info: RoundInfo) => void;
   /** Anything changed that a lobby/results screen should repaint for. */
@@ -120,11 +132,17 @@ export function createRounds(config: RoundsConfig): Rounds {
   const minPlayers = config.minPlayers ?? 2;
   const autoStart = config.autoStart ?? true;
 
+  const graceMs = config.graceMs ?? 8000;
+  const now = (): number => Date.now();
+
   let round = 0;
   let phase: RoundPhase = 'waiting';
   /** peer id -> vote, for the NEXT round only. Cleared on every round start. */
   const votes = new Map<PeerId, { name: string; in: boolean }>();
   const names = new Map<PeerId, string>([[net.selfId, config.playerName]]);
+  /** Set once quorum is reached but some peers still have not answered. */
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  let graceEndsAt = 0;
 
   const next = (): number => round + 1;
 
@@ -155,6 +173,7 @@ export function createRounds(config: RoundsConfig): Rounds {
       voted: !!votes.get(net.selfId)?.in,
       isHost: net.isHost(),
       canStart: net.isHost() && voters().length >= minPlayers,
+      startsInMs: graceEndsAt ? Math.max(0, graceEndsAt - now()) : null,
     };
   }
 
@@ -194,6 +213,7 @@ export function createRounds(config: RoundsConfig): Rounds {
     // Monotonic guard: ignore duplicates, replays, and late deliveries. This is
     // what makes two peers pressing "Play again" at the same instant safe.
     if (msg.round <= round) return;
+    clearGrace();
     round = msg.round;
     phase = 'playing';
     votes.clear();
@@ -220,9 +240,31 @@ export function createRounds(config: RoundsConfig): Rounds {
 
   function maybeAutoStart(): void {
     if (!autoStart || !net.isHost() || phase === 'playing') return;
-    const here = present();
     const yes = voters();
-    if (yes.length >= minPlayers && yes.length === here.length) go();
+    if (yes.length < minPlayers) return clearGrace();
+    if (yes.length === present().length) {
+      clearGrace();
+      return go(); // everyone is in — no reason to wait
+    }
+
+    // Quorum, but not everyone. Waiting for unanimity forever is how the old
+    // build deadlocked: one player still reading the summary, idle, or just slow
+    // to tap held the whole room hostage with no way out but the menu. Give the
+    // stragglers a visible countdown, then start without them.
+    if (graceTimer) return;
+    graceEndsAt = now() + graceMs;
+    graceTimer = setTimeout(() => {
+      graceTimer = undefined;
+      graceEndsAt = 0;
+      if (net.isHost() && phase !== 'playing' && voters().length >= minPlayers) go();
+    }, graceMs);
+    changed();
+  }
+
+  function clearGrace(): void {
+    if (graceTimer) clearTimeout(graceTimer);
+    graceTimer = undefined;
+    graceEndsAt = 0;
   }
 
   // Ask the room to re-declare itself. Cheap, and it heals three things: a peer
@@ -262,6 +304,7 @@ export function createRounds(config: RoundsConfig): Rounds {
       if (phase !== 'playing') return;
       phase = 'waiting';
       votes.clear();
+      clearGrace();
       changed();
     },
 
@@ -269,6 +312,7 @@ export function createRounds(config: RoundsConfig): Rounds {
 
     destroy() {
       clearInterval(poll);
+      clearGrace();
       // Detach OUR receivers only — the Net outlives this and may host another
       // Rounds later. Leaking these is how a dead screen keeps answering peers.
       (sendVote as unknown as { off: Unsubscribe }).off();

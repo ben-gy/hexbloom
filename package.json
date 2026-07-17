@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Pick a colour, bloom your blob across the honeycomb, and claim more tiles than your rivals.",
   "scripts": {
+    "gen:icons": "node scripts/gen-icons.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

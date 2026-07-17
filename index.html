@@ -8,7 +8,20 @@
     <meta property="og:title" content="Hexbloom" />
     <meta property="og:description" content="Pick a colour, bloom your blob across the honeycomb, and claim more tiles than your rivals." />
     <meta property="og:type" content="website" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- Every path here is RELATIVE: the game is served from a project subpath in
+         dev and from its own domain in prod, and an absolute /icons/… resolves to
+         the wrong host root in the first case. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#0d0f14" />
+    <!-- iOS ignores the manifest's icons and display mode entirely; this block is
+         the only thing that makes "Add to Home Screen" look right there. The
+         apple-touch-icon is opaque on purpose — iOS composites transparency onto
+         black, which would ring the tile. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Hexbloom" />
     <title>Hexbloom</title>
     <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "ba2bab2193ba42c1bea3d6714fcd0e28"}'></script>
   </head>

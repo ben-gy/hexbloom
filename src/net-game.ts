@@ -8,13 +8,15 @@
  * the round-start message, so index N is the same player on every peer with no
  * negotiation and no local re-derivation.
  *
- * Authority follows that frozen roster, NOT net.host(). The room outlives the
- * round, so anyone may walk in mid-game; net.host() is a min-id election over
- * everyone present, and a joiner with a smaller peer id would win it, seize
- * authority over a match it holds no state for, and freeze the board forever.
- * A peer outside the round's roster is a spectator and can never be its host.
- * Host migration inside the roster still works: the round host is simply the
- * smallest CONNECTED seat, so a real player leaving promotes the next one.
+ * Authority is the ROOM's host (net.host(), held by incumbency) narrowed to the
+ * round's roster — one notion of host, not two. The room outlives the round, so
+ * anyone may walk in mid-game: a joiner never wins net.host() (the incumbent
+ * keeps it) and is not in the frozen roster either, so it can never seize
+ * authority over a match it holds no state for. A spectator is only ever a
+ * spectator. Handover still works both ways: when the room's host leaves,
+ * net.ts promotes a survivor, and if that survivor is not seated in this round
+ * we fall back to the smallest CONNECTED seat — a rule every peer computes
+ * identically from the same frozen bytes.
  */
 
 import type { Net, PeerId, Unsubscribe } from './engine/net';
@@ -101,13 +103,16 @@ export class NetGame {
   }
 
   /**
-   * The authority for THIS round: the lowest-id seat still connected. Derived
-   * from the frozen roster, so a mid-game joiner — who may well win net.host()'s
-   * min-id election — is never it.
+   * The authority for THIS round: the room's host when it holds a seat here,
+   * otherwise the lowest-id seat still connected. The fallback is what covers a
+   * host that left (its replacement may be a spectator who joined mid-game) and
+   * the moments before the room settles, when net.host() is deliberately null.
    */
   private roundHost(): PeerId | null {
     const here = new Set(this.net.peers());
     const live = this.seats.filter((id) => here.has(id)).sort();
+    const roomHost = this.net.host();
+    if (roomHost && live.includes(roomHost)) return roomHost;
     return live[0] ?? null;
   }
 
