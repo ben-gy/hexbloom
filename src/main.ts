@@ -10,10 +10,12 @@ import './styles/main.css';
 import { hardenViewport } from './engine/mobile';
 import {
   applyMove,
+  bloomReach,
   captureCount,
   chooseAiColor,
   generateBoard,
   scores,
+  TIDE_EVERY,
   winners,
   type Difficulty,
   type GameState,
@@ -258,6 +260,8 @@ class GameSession {
   /** Highest turnNo already counted — snapshots can arrive twice (a re-sync
    *  replays the current position), and a double count would inflate the stats. */
   private countedTurn = 0;
+  /** Last rendered bloom reach; -1 until the first paint so we don't chime on it. */
+  private lastReach = -1;
   private againTick: ReturnType<typeof setInterval> | null = null;
 
   constructor(private driver: Driver) {
@@ -283,6 +287,7 @@ class GameSession {
         </div>
         <div class="hud" id="hud"></div>
         <div class="board-wrap"><div class="board" id="board"></div></div>
+        <div class="tide-bar" id="tideBar" role="status" aria-live="polite"></div>
         <div class="palette" id="palette" role="group" aria-label="Choose a colour"></div>
         <div class="game-actions">
           <button class="btn btn-ghost" data-act="howto">How to play</button>
@@ -387,6 +392,31 @@ class GameSession {
             </div>`;
           }).join('')
         : '';
+    }
+
+    // The tide governs what the palette can do, so it lives right above it. Dots
+    // rather than a number: the shape of the row reads at a glance, and the whole
+    // point is that it grows.
+    const tideBar = document.getElementById('tideBar');
+    if (tideBar && !state.finished) {
+      const reach = bloomReach(state);
+      const next = TIDE_EVERY(state.players) - (state.turnNo % TIDE_EVERY(state.players));
+      const rose = reach > this.lastReach;
+      tideBar.className = `tide-bar${rose && this.lastReach >= 0 ? ' rose' : ''}`;
+      tideBar.innerHTML =
+        `<span class="tide-label">Bloom reach</span>` +
+        `<span class="tide-dots" aria-hidden="true">${'<i></i>'.repeat(Math.min(reach, 8))}</span>` +
+        `<span class="tide-n">${reach}</span>` +
+        `<span class="tide-next">tide rises in ${next} move${next === 1 ? '' : 's'}</span>`;
+      tideBar.setAttribute(
+        'aria-label',
+        `Bloom reach ${reach} tile${reach === 1 ? '' : 's'}. Tide rises in ${next} move${next === 1 ? '' : 's'}.`,
+      );
+      // Pitched below the big-bloom powerup so the two don't read as the same event.
+      if (rose && this.lastReach >= 0) sfx.play('powerup', 0.7);
+      this.lastReach = reach;
+    } else if (tideBar) {
+      tideBar.innerHTML = '';
     }
 
     const banner = document.getElementById('turnBanner');

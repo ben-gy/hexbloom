@@ -12,11 +12,13 @@ owns another.
 
 On your turn you pick any colour except the one you already are. Your whole
 territory recolours to it and instantly **absorbs every touching tile of that
-colour**, blooming outward in a satisfying cascade. Bigger same-colour clusters
-mean bigger gains — but the colour that grabs the most *right now* often isn't the
-one that opens the most frontier for next turn, and a colour your rival needs is
-one you can starve first. When the board runs out of neutral tiles, the largest
-territory wins.
+colour**, blooming outward in a satisfying cascade — **but only as far as the tide
+reaches, and the tide rises every few moves.** Early on a bloom creeps one tile at
+a time; by the end it sweeps. Bigger same-colour clusters mean bigger gains — but
+the colour that grabs the most *right now* often isn't the one that opens the most
+frontier for next turn, a fat patch just out of reach isn't lost but ripening for
+high tide, and a colour your rival needs is one you can starve first. When the
+board runs out of neutral tiles, the largest territory wins.
 
 It's instantly playable solo against the AI (three difficulties), and genuinely
 fun head-to-head with friends over a shared link.
@@ -24,6 +26,9 @@ fun head-to-head with friends over a shared link.
 ## How to play
 - **Pick a colour** to flood your blob — click a swatch (desktop) or tap it (mobile).
   Each swatch shows how many tiles it would capture.
+- **Watch the tide.** The bar under the board shows your current **bloom reach** —
+  how many tiles out a bloom can spread — and when it next rises. Nobody can run
+  away with the board early; play the long game and cash in at high tide.
 - **You can't pick the colour you already are.**
 - **Rivals bloom from their corners too** — grab contested ground first.
 - **Largest territory when the board fills wins.**

@@ -457,6 +457,78 @@ body {
 }
 
 /* ---------- palette ---------- */
+/* ---------- tide ---------- */
+.tide-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 22px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tide-bar:empty {
+  margin: 0;
+  min-height: 0;
+}
+.tide-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  font-size: 11px;
+}
+.tide-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.tide-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  opacity: 0.85;
+}
+.tide-n {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--text);
+}
+.tide-next {
+  opacity: 0.75;
+}
+/* The tide rising is the game's turning point — mark it, briefly. */
+.tide-bar.rose .tide-dots i:last-child {
+  animation: tide-pop 0.5s ease;
+}
+.tide-bar.rose .tide-n {
+  animation: tide-flash 0.6s ease;
+}
+@keyframes tide-pop {
+  0% {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.6);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+}
+@keyframes tide-flash {
+  0%,
+  100% {
+    color: var(--text);
+  }
+  40% {
+    color: var(--accent-2);
+    text-shadow: 0 0 10px var(--accent-2);
+  }
+}
+
 .palette {
   display: flex;
   gap: 8px;
