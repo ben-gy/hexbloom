@@ -55,7 +55,7 @@ vi.mock('trystero', () => ({
   },
 }));
 
-const { createNet, netStats, resetNetStats } = await import('../src/engine/net');
+const { createNet, netStats, resetNetStats } = await import('@ben-gy/game-engine/net');
 
 const APP = 'hexbloom-lifecycle';
 

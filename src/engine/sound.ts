@@ -1,7 +1,16 @@
 /**
  * sound.ts — procedural sound effects via the Web Audio API. Zero asset files.
- * Copied from the gh-game-factory patterns/ engine and extended with a couple of
- * Hexbloom-specific patches. Call sfx.unlock() from the first user gesture.
+ * Call sfx.unlock() from the first user gesture.
+ *
+ * WHY THIS IS NOT '@ben-gy/game-engine/sound'. Hexbloom needs two things the
+ * engine's version cannot currently express: the 'bloom' and 'turn' patches, and
+ * a `pitch` multiplier on play() — the bloom chirp rises with the size of the
+ * capture, which is the game's main piece of feedback. The engine's createSfx()
+ * takes only `initialMuted`; its PATCHES table and SfxName union are module
+ * constants with no config seam, so extra patches genuinely cannot be passed in.
+ * Keep this fork until the engine grows an `extraPatches` option, then delete it.
+ *
+ * Nothing about netcode lives here, so forking it costs no reliability.
  */
 
 export type SfxName =

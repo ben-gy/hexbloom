@@ -13,7 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "trystero": "^0.21.0"
+    "@ben-gy/game-engine": "github:ben-gy/gh-game-engine#v1.1.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

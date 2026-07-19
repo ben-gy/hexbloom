@@ -12,7 +12,7 @@ mountFeedback();
 
 import './styles/mobile.css';
 import './styles/main.css';
-import { hardenViewport } from './engine/mobile';
+import { hardenViewport } from '@ben-gy/game-engine/mobile';
 import {
   applyMove,
   bloomReach,
@@ -25,11 +25,12 @@ import {
   type Difficulty,
   type GameState,
 } from './game';
-import { newSeed } from './engine/rng';
+import { newSeed } from '@ben-gy/game-engine/rng';
 import { createSfx } from './engine/sound';
-import { createStore } from './engine/storage';
-import { createNet, type Net } from './engine/net';
-import { createRounds, type RoundPlayer, type Rounds } from './engine/rematch';
+import { createStore } from '@ben-gy/game-engine/storage';
+import { createNet, roomAppId, setTurnConfig, type Net } from '@ben-gy/game-engine/net';
+import { getTurnConfig } from '@ben-gy/game-engine/turn';
+import { createRounds, type RoundPlayer, type Rounds } from '@ben-gy/game-engine/rematch';
 import {
   clearRoomInUrl,
   createLobby,
@@ -41,7 +42,7 @@ import {
   type BoardAccess,
   type Listing,
 } from './engine/lobby';
-import { createNoticeboard, type Noticeboard, type PublicRoom } from './engine/noticeboard';
+import { createNoticeboard, type Noticeboard, type PublicRoom } from '@ben-gy/game-engine/noticeboard';
 import { createCountdown } from './countdown';
 import { DEFAULT_MODE, MODE_LIST, modeOf, type Mode, type ModeId } from './modes';
 import { NetGame } from './net-game';
@@ -57,10 +58,42 @@ import {
 } from './ui';
 
 const APP_ID = 'hexbloom';
+/**
+ * The appId every mesh on this page joins with. `roomAppId` stamps the protocol
+ * revision onto the slug so a future wire-format change partitions old builds
+ * automatically instead of letting them into a room they cannot speak in. The
+ * noticeboard keys off the same appId, so it gets the stamped one too.
+ *
+ * NOTE this is not the storage namespace — `createStore` keeps the bare slug, or
+ * a protocol bump would silently orphan every player's saved settings.
+ */
+const ROOM_APP_ID = roomAppId(APP_ID);
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 4;
 const RIVAL_NAMES = ['Vero', 'Cyra', 'Juno'];
 const NAME_POOL = ['Fox', 'Wren', 'Sage', 'Koi', 'Lark', 'Bea', 'Nova', 'Pip', 'Ozzy', 'Rio'];
+
+/**
+ * TURN credentials for EVERY mesh this page opens, fetched once at boot.
+ *
+ * This has to happen before the first `joinRoom` anywhere on the page, not just
+ * before the game room. Trystero builds ONE global pool of pre-made peer
+ * connections from whichever room joins FIRST, and every later room draws its
+ * outbound offers from that pool — so if the public-rooms noticeboard opens
+ * first without TURN, the game room's initiating half stays STUN-only no matter
+ * what the game room itself was configured with. That failure is worse than
+ * having no TURN at all, because it only affects the roughly half of pairs where
+ * Trystero picked the turnless side as initiator.
+ *
+ * Kicked off here at module load, and awaited at each mesh site below. It is
+ * session-cached and fails open to `[]` (plain STUN-only, the old behaviour) on
+ * timeout or error, so it can delay a first join by at most its own 3s timeout
+ * and can never block one.
+ */
+const turnReady: Promise<void> = getTurnConfig().then(
+  (servers) => setTurnConfig(servers),
+  () => setTurnConfig([]),
+);
 
 // Before anything renders: iOS ignores the viewport meta's user-scalable=no, so a
 // double-tap or pinch would zoom a live board with no way back out.
@@ -235,8 +268,11 @@ let boardQueue: Promise<void> = Promise.resolve();
 
 function onBoard(then: () => void): Promise<void> {
   boardQueue = boardQueue
+    // The board can be the first mesh on the page, so it must not open before the
+    // shared TURN config is in force — see `turnReady`.
+    .then(() => turnReady)
     .then(() => {
-      board ??= createNoticeboard({ appId: APP_ID, onRooms: (r) => boardRooms?.(r) });
+      board ??= createNoticeboard({ appId: ROOM_APP_ID, onRooms: (r) => boardRooms?.(r) });
       then();
     })
     .then(
@@ -1018,6 +1054,9 @@ async function openRoom(code: string, created: boolean, isPublic: boolean): Prom
   // A previous room may still be tearing down (Trystero defers it ~99ms). Joining
   // inside that window returns the dying room, so wait it out.
   await roomTeardown;
+  // Never open the game room STUN-only. Already resolved unless this is the very
+  // first mesh of the session, and it fails open, so it costs nothing.
+  await turnReady;
   // The public flag stays OUT of the URL. It is the host's live choice, not a
   // property of the code: baked into an invite link it would survive the host
   // flipping the room private, and every guest who forwarded the link would be
@@ -1031,7 +1070,7 @@ async function openRoom(code: string, created: boolean, isPublic: boolean): Prom
       // `created` is the difference between minting this code and walking into
       // someone else's room. Only the minter may host on arrival; a guest waits
       // to hear from the incumbent instead of racing it for the role.
-      { appId: APP_ID, roomId: code, claimHost: created },
+      { appId: ROOM_APP_ID, roomId: code, claimHost: created },
       {
         onPeers: () => activeNetGame?.onRoster(),
         // The round's authority is the room's host narrowed to the roster, so a
