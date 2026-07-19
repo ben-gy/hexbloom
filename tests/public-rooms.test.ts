@@ -25,7 +25,7 @@ import {
   type BoardAccess,
   type ListingState,
 } from '../src/engine/lobby';
-import type { PublicRoom, RoomAd } from '../src/engine/noticeboard';
+import type { PublicRoom, RoomAd } from '@ben-gy/game-engine/noticeboard';
 
 /** A board that records what it was asked to do, and never touches a network. */
 function fakeBoard(): BoardAccess & {

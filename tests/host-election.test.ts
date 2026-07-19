@@ -20,7 +20,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Net } from '../src/engine/net';
+import type { Net } from '@ben-gy/game-engine/net';
 
 interface Wire {
   peers: Map<string, Room>;
@@ -111,7 +111,7 @@ async function peer(id: string, opts: { claimHost?: boolean } = {}): Promise<Net
       return room;
     },
   }));
-  const mod = await import('../src/engine/net');
+  const mod = await import('@ben-gy/game-engine/net');
   return mod.createNet({ appId: 'hexbloom-election', roomId: 'R', claimHost: opts.claimHost });
 }
 
@@ -183,13 +183,19 @@ describe('host election — nobody hosts a mesh that has not formed', () => {
     connect('a', 'b');
     // Neither claimed (both arrived via a link into an empty room). They must
     // not deadlock waiting for an incumbent that does not exist.
-    vi.advanceTimersByTime(2600);
+    //
+    // Past SETTLE_MS, which engine v1.1.0 raised from 2.5s to 6s. The old window
+    // was shorter than Nostr discovery plus ICE routinely takes on mobile, so a
+    // joiner would give up waiting, self-elect on a roster of one, and then
+    // STEAL the room from a host that was live the whole time. Waiting longer
+    // here is the fix, not a slower test.
+    vi.advanceTimersByTime(6100);
     expect(a.isHost()).toBe(true); // min-id, agreed by both
     expect(b.isHost()).toBe(false);
     expect(b.host()).toBe('a');
   });
 
-  it('settles the creator immediately so "Create a room" is not a 2.5s wait', async () => {
+  it('settles the creator immediately so "Create a room" is not a 6s wait', async () => {
     const host = await peer('z', { claimHost: true });
     expect(host.hostSettled()).toBe(true);
     expect(host.isHost()).toBe(true);

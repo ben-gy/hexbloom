@@ -9,7 +9,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { hardenViewport } from '../src/engine/mobile';
+import { hardenViewport } from '@ben-gy/game-engine/mobile';
 
 /** Dispatch a cancelable event and report whether the guard refused it. */
 function fire(type: string, init: Record<string, unknown> = {}): boolean {

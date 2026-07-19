@@ -14,7 +14,7 @@
  * invariant. Nothing here calls Math.random().
  */
 
-import { makeRng, randInt, shuffle } from './engine/rng';
+import { makeRng, randInt, shuffle } from '@ben-gy/game-engine/rng';
 
 export const DEFAULT_W = 9;
 export const DEFAULT_H = 9;

@@ -4,7 +4,7 @@
  * Adapted from the gh-game-factory patterns/tests template.
  */
 import { describe, expect, it } from 'vitest';
-import { makeRng, hashSeed, randInt, shuffle, pick } from '../src/engine/rng';
+import { makeRng, hashSeed, randInt, shuffle, pick } from '@ben-gy/game-engine/rng';
 import { generateBoard } from '../src/game';
 
 describe('makeRng determinism (P2P sync invariant)', () => {

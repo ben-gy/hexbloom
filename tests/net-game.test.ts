@@ -14,17 +14,32 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { NetGame } from '../src/net-game';
 import { legalColors, type GameState } from '../src/game';
-import type { Net, PeerId } from '../src/engine/net';
+import type { Net, PeerId } from '@ben-gy/game-engine/net';
 
 /** Shared in-memory bus, synchronous delivery — protocol, not timing. */
 class Bus {
   peers = new Map<PeerId, Map<string, Set<(d: unknown, from: PeerId) => void>>>();
+  /** Per-peer roster listeners, backing net.onPeersChange(). */
+  watchers = new Map<PeerId, Set<(peers: PeerId[]) => void>>();
 
   join(id: PeerId): void {
     this.peers.set(id, new Map());
+    this.watchers.set(id, new Set());
+    this.rosterChanged();
   }
   part(id: PeerId): void {
     this.peers.delete(id);
+    this.watchers.delete(id);
+    this.rosterChanged();
+  }
+  private rosterChanged(): void {
+    const roster = this.roster();
+    for (const set of [...this.watchers.values()]) for (const cb of [...set]) cb(roster);
+  }
+  watch(id: PeerId, cb: (peers: PeerId[]) => void): () => void {
+    const set = this.watchers.get(id)!;
+    set.add(cb);
+    return () => set.delete(cb);
   }
   roster(): PeerId[] {
     return [...this.peers.keys()].sort();
@@ -66,6 +81,24 @@ function mockNet(bus: Bus, selfId: PeerId, roomHost: () => PeerId | null = () =>
     },
     ping: async () => 0,
     leave: async () => bus.part(selfId),
+    // ── engine v1.1.0 additions ──────────────────────────────────────────────
+    // These tests are about NetGame refusing authority to the wrong peer, so the
+    // interesting part is `roomHost` above; the epoch is what the REAL net uses
+    // to make that same call, and a constant is honest for a bus with no race.
+    hostEpoch: () => 1,
+    onPeersChange: (cb) => bus.watch(selfId, cb),
+    takeover: () => {
+      /* the room's incumbent is fixed by `roomHost` — nothing to seize */
+    },
+    netDiag: () => ({
+      selfId,
+      host: roomHost(),
+      epoch: 1,
+      settled: true,
+      peers: bus.roster(),
+      relaySockets: {},
+      turn: false,
+    }),
   };
 }
 

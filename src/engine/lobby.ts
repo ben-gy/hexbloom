@@ -1,7 +1,14 @@
 /**
- * lobby.ts — a drop-in peer-to-peer lobby built on net.ts + rematch.ts. Copied
- * from the gh-game-factory patterns/ engine. Style .lobby-* / .spinner in the
- * game CSS.
+ * lobby.ts — a drop-in peer-to-peer lobby built on the engine's net + rematch.
+ * Style .lobby-* / .spinner in the game CSS.
+ *
+ * WHY THIS IS NOT '@ben-gy/game-engine/lobby'. This is a superset of the engine
+ * view, carrying Hexbloom's public-rooms surface — the private/public chooser,
+ * the noticeboard browser, the IP-disclosure notes, BoardAccess/Listing and the
+ * roomAd() rule that decides whether a room is advertised — plus the host-only
+ * mode picker slot. None of that has a seam in the engine's lobby, so it stays
+ * here. It is a VIEW only: every behaviour that matters for connecting is
+ * imported from the package below, so the v1.1.0 netcode fixes apply in full.
  *
  * This file is a VIEW. It owns no protocol: presence, readiness, quorum, the
  * shared seed and the frozen roster all come from rematch.ts, so starting the
@@ -11,11 +18,11 @@
  * about who player 0 was.
  */
 
-import type { Net, PeerId } from './net';
+import type { Net, PeerId } from '@ben-gy/game-engine/net';
 // Types only. Importing the noticeboard's implementation here would drag a mesh
 // of strangers into every screen that shows a room code — see BoardAccess.
-import type { PublicRoom, RoomAd } from './noticeboard';
-import type { Rounds } from './rematch';
+import type { PublicRoom, RoomAd } from '@ben-gy/game-engine/noticeboard';
+import type { Rounds } from '@ben-gy/game-engine/rematch';
 
 export interface LobbyPlayer {
   id: PeerId;
@@ -486,9 +493,59 @@ export function createLobby(config: LobbyConfig): { destroy: () => void; repaint
    *  focus on the invite-link field. */
   let painted = '';
 
+  /**
+   * A round is running that we are not in. Keep the ready toggle live so the
+   * player is queued for the next round the moment it opens, instead of having
+   * to notice the game ended and tap in time.
+   *
+   * Ported from the engine's lobby, which this file forks. Without it an
+   * unseated peer got a BLANK screen: `render()` bailed on phase 'playing' and
+   * nothing else owned the container. That is precisely what "I got ejected"
+   * looked like from the player's seat (01-DIAGNOSIS §3b) — engine v1.1.0 stops
+   * the roster being frozen out of a half-formed mesh, but a peer can still
+   * legitimately arrive mid-round, and it must land somewhere honest.
+   */
+  function renderSpectating(round: number): void {
+    const s = rounds.state();
+    const key = JSON.stringify([round, s.voted, s.present.length, 'spectating']);
+    if (key === painted) return;
+    painted = key;
+
+    container.innerHTML = `
+      <div class="lobby lobby-spectating">
+        <div class="lobby-head">
+          <h2 class="lobby-title">Round ${round} in progress</h2>
+          <p class="lobby-sub">You're in the next one — ${s.present.length} in the room</p>
+        </div>
+        <div class="lobby-searching">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Waiting for this round to finish…</span>
+        </div>
+        <div class="lobby-actions">
+          <button class="lobby-btn primary lobby-ready" type="button">${
+            s.voted ? "You're in for the next round" : 'Ready me for the next round'
+          }</button>
+          ${config.onCancel ? '<button class="lobby-btn ghost lobby-cancel" type="button">Leave room</button>' : ''}
+        </div>
+        <div class="lobby-flash" role="status" aria-live="polite"></div>
+      </div>`;
+
+    container.querySelector('.lobby-ready')?.addEventListener('click', () => {
+      if (rounds.state().voted) rounds.unvote();
+      else rounds.vote();
+      render();
+    });
+    container.querySelector('.lobby-cancel')?.addEventListener('click', () => config.onCancel?.());
+  }
+
   function render(): void {
     const s = rounds.state();
-    if (s.phase === 'playing') return;
+    if (s.phase === 'playing') {
+      // Seated: the game owns the screen, so the lobby must keep its hands off.
+      if (s.seated) return;
+      renderSpectating(s.round);
+      return;
+    }
     const ps = players();
     const key = JSON.stringify([ps, s.canStart, s.voted, net.hostSettled(), config.modeSlot?.() ?? '']);
     if (key === painted) return;

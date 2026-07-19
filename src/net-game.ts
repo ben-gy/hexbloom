@@ -19,7 +19,7 @@
  * identically from the same frozen bytes.
  */
 
-import type { Net, PeerId, Unsubscribe } from './engine/net';
+import type { Net, PeerId, Unsubscribe } from '@ben-gy/game-engine/net';
 import {
   applyMove,
   chooseAiColor,
