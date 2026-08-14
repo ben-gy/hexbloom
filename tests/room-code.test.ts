@@ -5,7 +5,7 @@
  * players silently land in different rooms.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearRoomInUrl, inviteLink, normalizeRoomCode, setRoomInUrl } from '../src/engine/lobby';
+import { clearRoomInUrl, inviteLink, normalizeRoomCode, setRoomInUrl } from '@ben-gy/game-engine/lobby';
 
 describe('normalizeRoomCode', () => {
   it('upper-cases so a typed code matches the host link', () => {

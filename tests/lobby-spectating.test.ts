@@ -5,19 +5,23 @@
  * v1.1.0 fixes the protocol half — the host no longer freezes a roster out of a
  * half-formed mesh, and a late connector gets the live round re-sent to it — but
  * a peer can still legitimately arrive mid-round, and `RoundInfo.seated` tells
- * it so. What the PLAYER experiences at that moment is the view's problem, and
- * hexbloom keeps its own fork of the engine's lobby (for public rooms and the
- * mode picker), so the engine's own coverage does not reach this code.
+ * it so. What the PLAYER experiences at that moment is the view's problem.
  *
- * Before this, the fork bailed out of render() on phase 'playing' and nothing
+ * Before this, the lobby bailed out of render() on phase 'playing' and nothing
  * else painted the container: an unseated player got a blank screen with no
  * ready button and no way back into the game. That is not a cosmetic bug — it is
  * the entire reported symptom, reproduced faithfully after the netcode was
  * fixed. So it is asserted here directly, against the real render path.
+ *
+ * These tests were written against hexbloom's forked lobby. The fork was
+ * deleted for engine v1.4.0 and they now run against
+ * `@ben-gy/game-engine/lobby` unchanged — which is the useful part: they are a
+ * game-side check that the shared view still behaves, not a copy of the
+ * engine's own coverage.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createLobby } from '../src/engine/lobby';
+import { createLobby } from '@ben-gy/game-engine/lobby';
 import type { Net, PeerId } from '@ben-gy/game-engine/net';
 import type { Rounds, RoundsState } from '@ben-gy/game-engine/rematch';
 

@@ -13,13 +13,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@ben-gy/game-engine": "github:ben-gy/gh-game-engine#v1.1.0"
+    "@ben-gy/game-engine": "github:ben-gy/gh-game-engine#v1.4.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
+    "jsdom": "^25.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",
-    "vitest": "^2.0.0",
-    "@types/node": "^22.0.0",
-    "jsdom": "^25.0.0"
+    "vitest": "^2.0.0"
   }
 }
