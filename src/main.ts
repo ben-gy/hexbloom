@@ -39,7 +39,7 @@ import {
   P2P_IP_NOTE,
   type BoardAccess,
   type Listing,
-} from './engine/lobby';
+} from '@ben-gy/game-engine/lobby';
 import { createNoticeboard, type Noticeboard, type PublicRoom } from '@ben-gy/game-engine/noticeboard';
 import { createCountdown } from './countdown';
 import { DEFAULT_MODE, MODE_LIST, modeOf, type Mode, type ModeId } from './modes';
@@ -1122,6 +1122,9 @@ function showLobby(): void {
     roomCode,
     minPlayers: MIN_PLAYERS,
     maxPlayers: MAX_PLAYERS,
+    // The two strings this game used to keep a whole forked lobby for.
+    share: { title: 'Join my Hexbloom game' },
+    labels: { start: 'Start game' },
     // Only the host chooses; everyone else sees what they are about to play, so
     // nobody is surprised by a 13×11 board they did not pick.
     modeSlot: () => (net!.isHost() ? modePicker() + visibilityPicker() : modeNote()),

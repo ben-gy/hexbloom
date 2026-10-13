@@ -24,7 +24,7 @@ import {
   roomAd,
   type BoardAccess,
   type ListingState,
-} from '../src/engine/lobby';
+} from '@ben-gy/game-engine/lobby';
 import type { PublicRoom, RoomAd } from '@ben-gy/game-engine/noticeboard';
 
 /** A board that records what it was asked to do, and never touches a network. */

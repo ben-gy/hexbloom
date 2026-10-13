@@ -691,6 +691,17 @@ body {
   border-color: var(--accent-2);
   color: #04202f;
 }
+/*
+ * The engine's join-QR toggle sits between the invite row and the roster, and
+ * carries only `margin: 10px auto 0` inline. `.lobby` is plain block flow with
+ * no gap, and `.lobby-players` has `margin-top: 0`, so without this the pill's
+ * border lands flat on the first player card and the two read as one control.
+ * Games whose `.lobby` is a flex/grid with a gap get this for free; this one
+ * does not. Arrived with engine v1.4.0's lobby migration.
+ */
+.lobby-qr-toggle {
+  margin-bottom: 14px !important;
+}
 .lobby-players {
   list-style: none;
   margin: 0 0 14px;
