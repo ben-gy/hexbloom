@@ -1,14 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Ben Richardson — https://benrichardson.dev
+// Additional terms under AGPL-3.0 section 7(b) apply; see ADDITIONAL-TERMS.md.
 /**
  * main.ts — Hexbloom bootstrap and orchestration. Owns the screen router, the
  * solo (vs-AI) and multiplayer (P2P) drivers, and the in-game session that turns
  * state updates into board paint + particles + sound. Heavy rules live in
  * game.ts; netcode in net-game.ts; rendering in render.ts.
  */
-
-// feedback:begin (managed by hub/scripts/feedback/backfill.mjs)
-import { mountFeedback } from './feedback';
-mountFeedback();
-// feedback:end
 
 import './styles/mobile.css';
 import './styles/main.css';
@@ -168,7 +166,6 @@ function playerName(): string {
   }
   return n;
 }
-
 
 // ---------------------------------------------------------------------------
 // Mode picker — the host's pick is the room's pick.

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Pick a colour, bloom your blob across the honeycomb, and claim more tiles than your rivals.",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "gen:icons": "node scripts/gen-icons.mjs",
     "dev": "vite",
